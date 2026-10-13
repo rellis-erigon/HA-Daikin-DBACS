@@ -214,6 +214,35 @@ class TestThePointSelectionIsHonoured:
         run(setup(hass, entry))
         assert registry.entries[0].disabled_by == "integration"
 
+    def test_a_point_switched_off_loses_its_stale_state(self, connects):
+        # Home Assistant publishes a restored state for the entity before
+        # setup gets here, and disabling the registry entry does not take it
+        # away. Without removing it, narrowing the point list leaves
+        # hundreds of entities reading `unavailable` until the whole of Home
+        # Assistant restarts.
+        from custom_components.daikin_dbacs import async_setup_entry as setup
+
+        hass = HomeAssistant()
+        entry = entry_for({OPT_MEMBERS: ["room_temp"]})
+        registry, _er = self._registry(hass, entry)
+        registry.add(
+            "binary_sensor.dbacs_heater", f"{entry.entry_id}_0_heater_status"
+        )
+
+        run(setup(hass, entry))
+        assert hass.states.removed == ["binary_sensor.dbacs_heater"]
+
+    def test_a_point_left_on_keeps_its_state(self, connects):
+        from custom_components.daikin_dbacs import async_setup_entry as setup
+
+        hass = HomeAssistant()
+        entry = entry_for({OPT_MEMBERS: ["room_temp"]})
+        registry, _er = self._registry(hass, entry)
+        registry.add("sensor.dbacs_room_temp", f"{entry.entry_id}_0_room_temp")
+
+        run(setup(hass, entry))
+        assert hass.states.removed == []
+
     def test_a_point_switched_off_by_hand_stays_off(self, connects):
         from custom_components.daikin_dbacs import async_setup_entry as setup
 

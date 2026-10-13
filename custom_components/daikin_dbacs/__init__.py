@@ -138,6 +138,13 @@ def _reconcile_enabled_entities(
                 entity.entity_id,
                 disabled_by=er.RegistryEntryDisabler.INTEGRATION,
             )
+            # Home Assistant has already published a restored state for this
+            # entity by the time setup reaches here, and disabling the
+            # registry entry does not take that away — it lingers as
+            # `unavailable` until the whole of Home Assistant restarts.
+            # Narrowing the point list would otherwise leave hundreds of
+            # dead entities on the device pages.
+            hass.states.async_remove(entity.entity_id)
             disabled += 1
 
     if enabled or disabled:

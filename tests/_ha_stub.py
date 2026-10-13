@@ -59,6 +59,16 @@ class _Loop:
         self.now += seconds
 
 
+class _States:
+    """The state machine, only as far as removing a state."""
+
+    def __init__(self) -> None:
+        self.removed: list = []
+
+    def async_remove(self, entity_id) -> None:
+        self.removed.append(entity_id)
+
+
 class HomeAssistant:
     """Just enough of hass to be passed around and stored."""
 
@@ -66,6 +76,7 @@ class HomeAssistant:
         self.data: dict = {}
         self.config_entries = _ConfigEntries()
         self.loop = _Loop()
+        self.states = _States()
 
 
 class _ConfigEntries:
