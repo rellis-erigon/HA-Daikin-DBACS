@@ -1,0 +1,16 @@
+{
+  "domain": "daikin_dbacs",
+  "name": "Daikin D-BACS",
+  "version": "0.1.0",
+  "config_flow": true,
+  "iot_class": "local_push",
+  "requirements": [
+    "bacpypes3>=0.0.106"
+  ],
+  "codeowners": [
+    "@rellis-erigon"
+  ],
+  "documentation": "https://github.com/rellis-erigon/HA-Daikin-DBACS",
+  "issue_tracker": "https://github.com/rellis-erigon/HA-Daikin-DBACS/issues",
+  "integration_type": "hub"
+}

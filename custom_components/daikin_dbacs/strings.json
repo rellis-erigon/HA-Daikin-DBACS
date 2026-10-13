@@ -1,0 +1,56 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Daikin D-BACS gateway",
+        "description": "The address of the Daikin \"Interface for use in BACnet\" gateway. Everything is unicast, so no BACnet broadcast or BBMD configuration is needed. The connection is tested before the entry is created.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "device_instance": "Gateway device instance",
+          "local_address": "Local address",
+          "local_port": "Local port",
+          "our_instance": "Our device instance"
+        },
+        "data_description": {
+          "host": "The gateway's IP address or hostname.",
+          "port": "BACnet/IP port on the gateway. 47808 unless it was changed with Daikin's Trial Operation tool.",
+          "device_instance": "Leave blank to learn it from a unicast Who-Is. Fill it in if the gateway does not answer — it is set with Daikin's Trial Operation tool.",
+          "local_address": "The interface to bind, as address/prefix, for a host with more than one network. Leave blank to bind every interface.",
+          "local_port": "The local UDP port to listen on. Change it if another BACnet client on this host already holds 47808.",
+          "our_instance": "The BACnet device instance Home Assistant presents as. It must be unique on the network — not the gateway's, and not a head-end's."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "No answer from the gateway: {error}",
+      "scanning": "The gateway is still scanning its DIII-NET network. Give it a minute and try again.",
+      "unknown": "Unexpected error: {error}"
+    },
+    "abort": {
+      "already_configured": "That gateway is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Points and timing",
+        "description": "A fully expanded gateway publishes 256 indoor-unit groups of 33 readable points — nearly 9,000 in all. Disabled points are never read and never subscribed, so this list is what decides the load on a gateway you are sharing with a building management system.",
+        "data": {
+          "members": "Points to carry, on every group",
+          "groups": "Groups to carry",
+          "scan_interval": "Sweep interval",
+          "use_cov": "Use change-of-value",
+          "cov_lifetime": "Subscription lifetime"
+        },
+        "data_description": {
+          "members": "Chosen per point and applied to every group, present and future.",
+          "groups": "Leave empty for every live group. Narrow it to switch a floor or a wing off wholesale.",
+          "scan_interval": "How often every enabled point is read. The sweep is the safety net; change-of-value carries what needs to be live.",
+          "use_cov": "Subscribe to run status, alarm, malfunction code and room temperature so they arrive as they change. The gateway allows five subscribers per point; a refusal falls back to the sweep.",
+          "cov_lifetime": "Renewed before it lapses. Subscriptions are also rebuilt automatically if the gateway is power cycled, because it forgets them."
+        }
+      }
+    }
+  }
+}

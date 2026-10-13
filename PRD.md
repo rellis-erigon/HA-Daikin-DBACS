@@ -1,6 +1,6 @@
 # Daikin D-BACS for Home Assistant — PRD
 
-**Status:** reviewed, decisions recorded · **Revised:** 2026-10-13 · **Target HA:** 2026.10 or later
+**Status:** Phase 1 implemented · **Revised:** 2026-10-13 · **Target HA:** 2026.10 or later
 
 A Home Assistant custom integration that talks BACnet/IP to a Daikin
 "Interface for use in BACnet" gateway, turns each indoor-unit group into a
@@ -244,16 +244,26 @@ its own review.
 2. **Multiple gateways:** each is its own config entry. Falls out of doing
    the config flow properly; no extra work.
 3. **Discovery, designed for a full gateway** (decision 5):
-   - Read the Device object's `Object_List`, paged by array index rather than
-     pulling ~9,000 identifiers in one segmented read.
+   - Probe one cheap point per AC number — all 256 — batched into
+     ReadPropertyMultiple requests. `UNKNOWN_OBJECT` is the gateway saying
+     the slot is not populated.
+   - Then read `CommunicationStatus` on everything that answered. A group
+     that publishes objects but reports a DIII-NET fault is populated but
+     **dead**. Absent and dead are both skipped, both listed in diagnostics,
+     and both picked up automatically if they come back.
    - Retry on `CONFIGURATION_IN_PROGRESS` with backoff — the gateway is
      scanning D3 and the answer is "not yet", not "nothing there".
-   - Decode each instance into *(AC number, member)*.
-   - For every AC number that appears, probe one cheap point. `UNKNOWN_OBJECT`
-     means the slot is not populated; a reachable group whose
-     `CommunicationStatus` reads faulted is populated but **dead**. Both are
-     recorded and skipped, and both are listed in diagnostics so a group that
-     comes back later is noticed.
+
+   **This replaces reading `Object_List` as the primary mechanism, and the
+   change is deliberate.** A full gateway's object list is ~9,000 identifiers
+   and roughly 45 KB once segmented — one large, slow, all-or-nothing read
+   that tells us which *objects* exist when the question is which *groups*
+   do. The probe sweep is 32 small requests, each independently
+   attributable, and it uses the gateway's own `UNKNOWN_OBJECT` answer rather
+   than inferring absence from a list. `Object_List` is still read, but only
+   its length (array index 0, one read) and only for diagnostics. Reading the
+   full list becomes worthwhile in Phase 4, where which *members* a group
+   publishes starts to matter — accumulated power is model-dependent.
 4. **Grouping:** one HA device per live AC number. Default name is its DIII
    address, `DBACS 2 · 1-05`, with port, line and group as device attributes.
    Identifiers are `(domain, entry_id, ac_number)` so nothing re-creates on
