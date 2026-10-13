@@ -64,30 +64,5 @@
         }
       }
     }
-  },
-  "entity": {
-    "climate": {
-      "indoor_unit": {
-        "name": null
-      }
-    },
-    "event": {
-      "fault": {
-        "name": "Fault",
-        "state_attributes": {
-          "event_type": {
-            "state": {
-              "fault": "Faulted",
-              "cleared": "Cleared"
-            }
-          }
-        }
-      }
-    }
-  },
-  "exceptions": {
-    "write_refused": {
-      "message": "{reason}"
-    }
   }
 }

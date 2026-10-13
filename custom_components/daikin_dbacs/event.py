@@ -42,7 +42,6 @@ class DbacsFaultEvent(DbacsEntity, EventEntity):
     """Fires when a group's alarm goes on or off."""
 
     _attr_event_types = [EVENT_FAULT, EVENT_CLEARED]
-    _attr_translation_key = "fault"
 
     def __init__(self, coordinator, ac_number: int) -> None:
         super().__init__(coordinator, ac_number, MEMBERS_BY_KEY["alarm"])

@@ -107,7 +107,6 @@ class DbacsClimate(DbacsEntity, ClimateEntity):
     _attr_target_temperature_step = TEMP_STEP
     _attr_min_temp = DEFAULT_MIN_TEMP
     _attr_max_temp = DEFAULT_MAX_TEMP
-    _attr_translation_key = "indoor_unit"
 
     def __init__(self, coordinator, ac_number: int) -> None:
         # The climate entity stands for the whole group rather than one
