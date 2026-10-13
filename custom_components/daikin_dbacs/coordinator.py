@@ -14,6 +14,8 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .const import (
     DEFAULT_CONTROL,
+    COV_MIN_LIFETIME,
+    COV_REFRESH_SPREAD,
     DEFAULT_COV_LIFETIME,
     DEFAULT_MIN_WRITE_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
@@ -519,7 +521,9 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         if not wanted:
             return
 
-        accepted = 0
+        # Worked out in full before anything is subscribed, because the
+        # lifetimes depend on how many there are. See _cov_lifetime.
+        planned: list[PointRef] = []
         for ac in self.active_groups:
             group = self.discovery.groups.get(ac)
             for key in wanted:
@@ -529,18 +533,23 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
                 point = PointRef(ac, member)
                 if point.key in self._cov_points:
                     continue
-                try:
-                    ok = await self.gateway.subscribe(
-                        point, self._cov_update, self.cov_lifetime
-                    )
-                except DbacsError as err:
-                    _LOGGER.debug("subscription refused for %s: %s", point.key, err)
-                    ok = False
-                if ok:
-                    self._cov_points[point.key] = point
-                    accepted += 1
-                else:
-                    self._cov_failed.add(point.key)
+                planned.append(point)
+
+        accepted = 0
+        for index, point in enumerate(planned):
+            lifetime = self._cov_lifetime(index, len(planned))
+            try:
+                ok = await self.gateway.subscribe(
+                    point, self._cov_update, lifetime
+                )
+            except DbacsError as err:
+                _LOGGER.debug("subscription refused for %s: %s", point.key, err)
+                ok = False
+            if ok:
+                self._cov_points[point.key] = point
+                accepted += 1
+            else:
+                self._cov_failed.add(point.key)
 
         if self._cov_failed:
             _LOGGER.info(
@@ -550,6 +559,30 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
                 accepted,
                 len(self._cov_failed),
             )
+
+    def _cov_lifetime(self, index: int, total: int) -> int:
+        """The lifetime for one subscription, counting down from the option.
+
+        bacpypes3 renews a subscription two seconds before its lifetime runs
+        out, and every subscription here is made within a second or two of
+        the others at startup. One shared lifetime therefore means every
+        renewal lands in the same instant: on this site 384 confirmed
+        requests at once to a gateway with a 1024-byte APDU, which stalled
+        the event loop about half an hour after each start and had the
+        Supervisor watchdog restarting Home Assistant every thirty-eight
+        minutes.
+
+        Each subscription gets its own lifetime instead, so the renewals are
+        spread on the first cycle and stay spread on the ones after, the
+        periods now differing as well as the phases. The configured value is
+        the longest used, so nothing outlives what was asked for.
+        """
+        lifetime = self.cov_lifetime
+        if total < 2:
+            return lifetime
+        headroom = max(0, lifetime - COV_MIN_LIFETIME)
+        spread = min(headroom, max(total - 1, COV_REFRESH_SPREAD))
+        return lifetime - (index * spread) // (total - 1)
 
     @callback
     def _cov_update(self, point: PointRef, value: Any) -> None:

@@ -53,6 +53,17 @@ MIN_SCAN_INTERVAL: Final = 60
 #: separately.
 DEFAULT_COV_LIFETIME: Final = 1800
 
+#: Subscriptions are given lifetimes counting down from the configured one so
+#: that bacpypes3, which refreshes each two seconds before its own lifetime
+#: runs out, does not refresh all of them at once. Spread over this many
+#: seconds, which at 96 groups puts about six seconds between refreshes.
+COV_REFRESH_SPREAD: Final = 600
+
+#: However short the configured lifetime, no subscription is given less than
+#: this. A subscription refreshing every few seconds would cost more than the
+#: storm the spread exists to prevent.
+COV_MIN_LIFETIME: Final = 120
+
 #: Objects per ReadPropertyMultiple. The gateway accepts a 1024-byte APDU
 #: and segments, but a modest chunk keeps one slow group from delaying the
 #: rest and keeps a failure attributable.

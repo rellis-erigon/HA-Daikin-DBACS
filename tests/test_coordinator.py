@@ -12,6 +12,7 @@ from homeassistant.helpers.update_coordinator import UpdateFailed
 
 from custom_components.daikin_dbacs import gateway as gw
 from custom_components.daikin_dbacs.const import (
+    OPT_COV_LIFETIME,
     OPT_GROUPS,
     OPT_MEMBERS,
     OPT_SCAN_INTERVAL,
@@ -282,6 +283,80 @@ class TestChangeOfValue:
         coordinator._cov_update(point, 29.5)
         assert coordinator.data[point.key].value == 29.5
         assert coordinator.updates
+
+
+class TestSubscriptionRefreshStagger:
+    """Why the lifetimes differ from one subscription to the next.
+
+    bacpypes3 schedules its own refresh `lifetime - 2` seconds after each
+    subscription is made. Every subscription here is made within a second or
+    two of the others at startup, so one shared lifetime means all of them
+    refresh in the same instant — on this site 384 confirmed requests at once
+    to a gateway with a 1024-byte APDU. That stalled the event loop about
+    thirty minutes after every start, until the Supervisor watchdog gave up
+    on the API and restarted Home Assistant, every thirty-eight minutes for
+    most of a day.
+
+    Giving each subscription its own lifetime spreads the refreshes and keeps
+    them spread, because the periods differ too.
+    """
+
+    def _lifetimes(self, groups, **options):
+        state = fake.FakeGatewayState(populated=set(range(groups)),
+                                      cov_budget=10_000)
+        coordinator, _ = build(state, options=options)
+        run(coordinator.async_discover())
+        run(coordinator.async_setup_cov())
+        return state.lifetimes, coordinator
+
+    def test_no_two_subscriptions_refresh_at_the_same_moment(self):
+        lifetimes, _ = self._lifetimes(24)
+        assert len(lifetimes) == 96
+        assert len(set(lifetimes)) == len(lifetimes)
+
+    def test_the_configured_lifetime_is_the_longest_one_used(self):
+        """The option stays an upper bound, so nothing outlives it."""
+        lifetimes, coordinator = self._lifetimes(24)
+        assert max(lifetimes) == coordinator.cov_lifetime
+        assert min(lifetimes) < coordinator.cov_lifetime
+
+    def test_the_spread_is_wide_enough_to_matter(self):
+        """Refreshes a few milliseconds apart would be no better."""
+        lifetimes, _ = self._lifetimes(24)
+        spread = max(lifetimes) - min(lifetimes)
+        gap = spread / (len(lifetimes) - 1)
+        assert spread >= 300
+        assert gap >= 1
+
+    def test_a_single_subscription_uses_the_configured_lifetime(self):
+        lifetimes, coordinator = self._lifetimes(1, **{OPT_MEMBERS: ["room_temp"]})
+        assert lifetimes == [coordinator.cov_lifetime]
+
+    def test_no_lifetime_is_short_enough_to_be_its_own_problem(self):
+        """A refresh every few seconds would be worse than the storm."""
+        lifetimes, _ = self._lifetimes(24)
+        assert min(lifetimes) >= 120
+
+    def test_a_short_configured_lifetime_is_still_spread(self):
+        lifetimes, _ = self._lifetimes(24, **{OPT_COV_LIFETIME: 300})
+        assert len(set(lifetimes)) > 1
+        assert min(lifetimes) >= 120
+        assert max(lifetimes) == 300
+
+    def test_rebuilding_after_a_power_cycle_spreads_them_again(self):
+        state = fake.FakeGatewayState(populated=set(range(24)),
+                                      cov_budget=10_000)
+        coordinator, _ = build(state)
+        run(coordinator.async_discover())
+        run(coordinator.async_setup_cov())
+
+        state.subscriptions.clear()
+        state.lifetimes.clear()
+        state.database_revision += 1
+        run(coordinator.async_refresh())
+
+        assert len(state.lifetimes) == 96
+        assert len(set(state.lifetimes)) == len(state.lifetimes)
 
 
 class TestGatewayRestart:

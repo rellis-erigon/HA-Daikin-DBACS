@@ -108,6 +108,8 @@ class FakeGatewayState:
     rpm_calls: list[list[Any]] = field(default_factory=list)
     writes: list[tuple[str, int, Any, int | None]] = field(default_factory=list)
     subscriptions: list[tuple[str, int]] = field(default_factory=list)
+    #: The lifetime each subscription was made with, in order.
+    lifetimes: list[int] = field(default_factory=list)
     #: Change-of-value notifications waiting to be delivered. A test pushes
     #: (property-identifier, value) pairs here the way the gateway would.
     notifications: Any = None
@@ -317,17 +319,20 @@ class FakeApp:
                 held.append(priority)
         return None
 
-    def change_of_value(self, _address, object_identifier, **_kwargs):
-        return _FakeSubscription(self.state, object_identifier)
+    def change_of_value(self, _address, object_identifier, lifetime=None,
+                        **_kwargs):
+        return _FakeSubscription(self.state, object_identifier, lifetime)
 
     def close(self) -> None:
         self.closed = True
 
 
 class _FakeSubscription:
-    def __init__(self, state: FakeGatewayState, object_identifier) -> None:
+    def __init__(self, state: FakeGatewayState, object_identifier,
+                 lifetime=None) -> None:
         self.state = state
         self.object_identifier = object_identifier
+        self.lifetime = lifetime
 
     async def __aenter__(self):
         if len(self.state.subscriptions) >= self.state.cov_budget:
@@ -335,6 +340,10 @@ class _FakeSubscription:
         self.state.subscriptions.append(
             _split_identifier(self.object_identifier)
         )
+        # bacpypes3 refreshes each subscription `lifetime - 2` seconds after
+        # it is made, so the lifetimes are what decide whether the refreshes
+        # arrive together. Recorded so a test can check they do not.
+        self.state.lifetimes.append(self.lifetime)
         return self
 
     async def __aexit__(self, *_exc) -> bool:
