@@ -258,3 +258,30 @@ class TestTheGeneratedCard:
         path = write(tmp_path, {"1 · 1-00": {
             "name": "Room A1", "faceplate": "fcu-unit"}})
         assert mapping.load(path)[0].faceplate == "fcu-unit"
+
+
+class TestWhichFaceplateWins:
+    """Bulk restyling, without losing a deliberate per-unit choice."""
+
+    def test_the_default_when_nobody_says_otherwise(self):
+        from custom_components.daikin_dbacs import cards
+
+        assert cards.card_for(device_name="x")["faceplate"] == "indoor-unit"
+
+    def test_a_caller_can_restyle_everything(self):
+        from custom_components.daikin_dbacs import cards
+
+        card = cards.card_for(device_name="x", faceplate="fcu-unit")
+        assert card["faceplate"] == "fcu-unit"
+
+    def test_a_per_unit_choice_is_what_the_file_is_for(self, tmp_path):
+        # The precedence itself lives in the service, which picks the
+        # site's answer before the caller's; this is the half of it the
+        # file provides.
+        path = write(tmp_path, {
+            "1 · 1-00": {"name": "Room A1", "faceplate": "daikin-brc1e63"},
+            "1 · 1-01": {"name": "Room A2"},
+        })
+        loaded = mapping.load(path)
+        assert loaded[0].faceplate == "daikin-brc1e63"
+        assert loaded[1].faceplate is None

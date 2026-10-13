@@ -195,6 +195,60 @@ Two things to know:
   mention it. The integration watches the device object for a restart and
   rebuilds them.
 
+## Choosing the card, in bulk
+
+A generated card is drawn with a *faceplate*, and there are three ways to
+say which — in order of precedence, so a deliberate choice is never
+overridden by a general one:
+
+**1. Per unit, in the mapping file.** For the unit that really does have a
+BRC1E63 on the wall beside it:
+
+```json
+{ "1 \u00b7 1-01": { "name": "Room A2 ACU A-02", "faceplate": "daikin-brc1e63" } }
+```
+
+**2. In bulk, from the dashboard.** One line restyles every unit the view
+draws, and it is the answer to "I want a better card than the default on
+all of them":
+
+```yaml
+strategy:
+  type: custom:bridge-devices
+  bridges: [daikin_dbacs]
+  faceplate: fcu-unit
+```
+
+**3. Nothing** — and every unit is drawn with `indoor-unit`, the full
+status face.
+
+The faceplates for this card are `indoor-unit` (everything the unit
+reports), `fcu-unit` (a compact tile, for grids of hundreds), and
+`daikin-brc1e63`, `daikin-brc2e61`, `daikin-brc1h63k` and `daikin-brc315d7`
+for the wall controllers they emulate.
+
+### Why this does not change Home Assistant's own Overview
+
+Home Assistant's auto-generated dashboard is produced by its `original-states`
+strategy, which draws its own tile and entity cards and has no mechanism for
+being told to use a custom one. There is no setting, anywhere, that makes it
+prefer a different card for a device.
+
+So a dashboard that is both automatic *and* uses these cards has to be built
+by a strategy that generates them, which is what `custom:bridge-devices` is
+for. Keep Home Assistant's own view and add one beside it:
+
+```yaml
+views:
+  - title: Home
+    strategy: {type: original-states}
+  - title: Air Conditioning
+    strategy: {type: custom:bridge-devices, bridges: [daikin_dbacs]}
+```
+
+Both views stay automatic — new units appear in either without anybody
+editing a dashboard.
+
 ## Site data stays out of this repository
 
 The gateway knows an indoor unit by its DIII-NET address and nothing else —

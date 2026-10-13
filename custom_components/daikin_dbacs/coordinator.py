@@ -136,6 +136,10 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         self.info = info
         self.discovery = Discovery()
         self.entry = entry
+        self.site: dict[int, Any] = {}
+        """What the site mapping file says about each unit, where there is
+        one. Held so a generated card can honour a per-unit faceplate
+        choice."""
         self.systems: dict[str, Any] = {}
         """Refrigerant systems, from the site mapping file if there is one.
 

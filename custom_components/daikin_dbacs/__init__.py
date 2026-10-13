@@ -117,6 +117,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: DbacsConfigEntry) -> boo
     except MappingError as err:
         _LOGGER.debug("no site mapping, so no outdoor units: %s", err)
     else:
+        coordinator.site = site
         coordinator.systems = systems_from_mapping(site)
         if coordinator.systems:
             _LOGGER.debug(
@@ -284,11 +285,20 @@ def _register_services(hass: HomeAssistant) -> None:
                 climate_entity = entities.async_get_entity_id(
                     "climate", DOMAIN, f"{entry.entry_id}_{ac_number}_climate"
                 )
+                # Precedence: what the site says about this unit, then
+                # what the caller asked for, then the default. A site that
+                # has deliberately said one unit is a wall controller is
+                # not overridden by a blanket dashboard setting.
+                entry_site = coordinator.site.get(ac_number)
+                faceplate = (
+                    getattr(entry_site, "faceplate", None)
+                    or call.data.get("faceplate")
+                )
                 cards.append(
                     generated(
                         device_name=name,
                         area_id=device.area_id,
-                        faceplate=call.data.get("faceplate"),
+                        faceplate=faceplate,
                         climate_entity=climate_entity,
                     )
                 )
