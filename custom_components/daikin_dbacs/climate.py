@@ -117,6 +117,11 @@ class DbacsClimate(DbacsEntity, ClimateEntity):
         self._attr_unique_id = (
             f"{coordinator.entry.entry_id}_{ac_number}_climate"
         )
+        # The base class names an entity after its point, and this one
+        # borrowed the power status member only for identity. A thermostat
+        # *is* the device, so it takes the device's name — otherwise the
+        # entity id picks up a stray `_running` suffix.
+        self._attr_name = None
 
         group = coordinator.discovery.groups.get(ac_number)
 

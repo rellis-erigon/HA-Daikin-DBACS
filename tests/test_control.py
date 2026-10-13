@@ -498,3 +498,14 @@ class TestLettingGo:
         assert "could not release" in caplog.text
         # Still recorded as held, because it still is.
         assert coordinator.held_points
+
+
+class TestEntityNaming:
+    def test_the_thermostat_takes_the_device_name(self):
+        # A climate entity *is* the indoor unit, so it must not be named
+        # after the point it borrowed for identity — that put a stray
+        # `_running` on the end of every entity id.
+        _c, entry, _s, _h = build()
+        entity = find(collect(climate, entry), 0)
+        assert entity.name is None
+        assert entity.unique_id.endswith("_0_climate")

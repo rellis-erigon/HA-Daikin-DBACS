@@ -45,7 +45,7 @@ from .const import (
     OPT_WRITE_PRIORITY,
 )
 from .gateway import DbacsGateway, DbacsNotReady, DbacsUnreachable
-from .objects import DEFAULT_MEMBERS, READABLE, address_label
+from .objects import DEFAULT_MEMBERS, SELECTABLE, address_label
 from .writes import CHANGES_PER_DAY
 
 _LOGGER = logging.getLogger(__name__)
@@ -183,7 +183,7 @@ class DbacsOptionsFlow(OptionsFlow):
                             value=member.key,
                             label=f"{member.number:>2}  {member.label}",
                         )
-                        for member in READABLE
+                        for member in SELECTABLE
                     ],
                     multiple=True,
                     mode=selector.SelectSelectorMode.LIST,

@@ -326,7 +326,11 @@ class TestObjectListDiscovery:
     """
 
     def _state(self):
-        common = set(MEMBERS) - {17, 21, 32, 33, 34, 35}
+        # Members 32-35 are absent on older firmware; heater status is the
+        # kind of point two units carry and the rest do not. A command
+        # member would not do here, because the point list does not govern
+        # commands.
+        common = set(MEMBERS) - {31, 32, 33, 34, 35}
         richer = set(MEMBERS) - {32, 33, 34, 35}
         populated = set(range(0, 9)) | set(range(10, 16))
         members = {ac: set(common) for ac in populated}
@@ -350,27 +354,27 @@ class TestObjectListDiscovery:
     def test_records_which_members_each_group_publishes(self):
         coordinator, _ = build(self._state())
         discovery = run(coordinator.async_discover())
-        assert 21 in discovery.members_of(0)
-        assert 21 not in discovery.members_of(5)
+        assert 31 in discovery.members_of(0)
+        assert 31 not in discovery.members_of(5)
         # Firmware decides whether the ventilation members exist at all.
         assert 32 not in discovery.members_of(0)
 
     def test_reads_no_point_the_gateway_does_not_have(self):
         coordinator, _ = build(
             self._state(),
-            options={OPT_MEMBERS: ["room_temp", "system_forced_off"]},
+            options={OPT_MEMBERS: ["room_temp", "heater_status"]},
         )
         run(coordinator.async_discover())
         points = coordinator.points()
-        forced = {p.ac_number for p in points if p.member.key == "system_forced_off"}
+        heater = {p.ac_number for p in points if p.member.key == "heater_status"}
         # Only the two groups that carry it, not all fifteen.
-        assert forced == {0, 1}
+        assert heater == {0, 1}
         assert len([p for p in points if p.member.key == "room_temp"]) == 15
 
     def test_a_sweep_of_a_narrowed_list_errors_on_nothing(self):
         coordinator, _ = build(
             self._state(),
-            options={OPT_MEMBERS: ["room_temp", "system_forced_off"]},
+            options={OPT_MEMBERS: ["room_temp", "heater_status"]},
         )
         run(coordinator.async_discover())
         data = run(coordinator._async_update_data())

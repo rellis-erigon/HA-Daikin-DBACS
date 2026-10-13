@@ -41,16 +41,18 @@ async def async_setup_entry(
 
 
 def _is_sensor(member: Member) -> bool:
-    """Everything that is not a binary point, and not write-only."""
-    if member.kind is Kind.COMMAND and member.object_type in (
-        ObjType.BO,
-        ObjType.BV,
-        ObjType.MO,
-    ):
-        # A command object's own value is readable, but it says what was last
-        # asked for rather than what the unit is doing. The matching status
-        # object is the honest answer, so the command is not exposed until
-        # there is a control entity that owns it.
+    """Everything that is not a binary point, and not a command.
+
+    A command object's value is readable, but it says what was last asked
+    for rather than what the unit is doing — and on an analog command such
+    as air direction the two differ visibly. The matching status object is
+    the honest answer, so a command is never a sensor; the climate entity
+    owns it instead.
+
+    This used to exclude only binary and multistate commands, which let
+    AirDirectionCommand through as a sensor on every group.
+    """
+    if member.kind is Kind.COMMAND:
         return False
     return member.object_type not in (ObjType.BI, ObjType.BO, ObjType.BV)
 

@@ -281,3 +281,81 @@ class TestThePointSelectionIsHonoured:
 
         run(setup(hass, entry))
         assert registry.updates == []
+
+
+class TestOnlyPointsFollowThePointList:
+    """Commands and resets are governed by control, not the point list.
+
+    A command member's key is never in the chosen list, because the chosen
+    list is readable status points. Without excluding them, a restart with
+    control on disabled all 96 switches and all 96 buttons — which is what
+    happened on a live system.
+    """
+
+    def _registry(self, hass, entry):
+        from homeassistant.helpers import entity_registry as er
+
+        registry = er.async_get(hass)
+        registry.entries.clear()
+        return registry, er
+
+    def test_a_command_switch_is_left_alone(self, connects):
+        from custom_components.daikin_dbacs import async_setup_entry as setup
+
+        hass = HomeAssistant()
+        entry = entry_for({OPT_MEMBERS: ["room_temp"], "control": True})
+        registry, _er = self._registry(hass, entry)
+        registry.add(
+            "switch.dbacs_energy_saving",
+            f"{entry.entry_id}_0_energy_saving_command",
+        )
+        run(setup(hass, entry))
+        assert registry.entries[0].disabled_by is None
+        assert hass.states.removed == []
+
+    def test_a_reset_button_is_left_alone(self, connects):
+        from custom_components.daikin_dbacs import async_setup_entry as setup
+
+        hass = HomeAssistant()
+        entry = entry_for({OPT_MEMBERS: ["room_temp"], "control": True})
+        registry, _er = self._registry(hass, entry)
+        registry.add(
+            "button.dbacs_filter_reset",
+            f"{entry.entry_id}_0_filter_sign_reset",
+        )
+        run(setup(hass, entry))
+        assert registry.entries[0].disabled_by is None
+
+    def test_one_disabled_in_error_is_put_back(self, connects):
+        # Self-healing, because a previous version of this did disable them.
+        from custom_components.daikin_dbacs import async_setup_entry as setup
+
+        hass = HomeAssistant()
+        entry = entry_for({OPT_MEMBERS: ["room_temp"], "control": True})
+        registry, er = self._registry(hass, entry)
+        registry.add(
+            "switch.dbacs_energy_saving",
+            f"{entry.entry_id}_0_energy_saving_command",
+            disabled_by=er.RegistryEntryDisabler.INTEGRATION,
+        )
+        registry.add(
+            "climate.dbacs_0",
+            f"{entry.entry_id}_0_climate",
+            disabled_by=er.RegistryEntryDisabler.INTEGRATION,
+        )
+        run(setup(hass, entry))
+        assert all(e.disabled_by is None for e in registry.entries)
+
+    def test_a_point_switched_off_by_hand_is_still_respected(self, connects):
+        from custom_components.daikin_dbacs import async_setup_entry as setup
+
+        hass = HomeAssistant()
+        entry = entry_for({OPT_MEMBERS: ["room_temp"], "control": True})
+        registry, er = self._registry(hass, entry)
+        registry.add(
+            "switch.dbacs_forced_off",
+            f"{entry.entry_id}_0_system_forced_off",
+            disabled_by=er.RegistryEntryDisabler.USER,
+        )
+        run(setup(hass, entry))
+        assert registry.entries[0].disabled_by == "user"

@@ -34,6 +34,7 @@ from .const import (
     MODEL,
 )
 from .coordinator import DbacsCoordinator
+from .objects import SELECTABLE
 from .gateway import DbacsError, DbacsGateway
 
 _LOGGER = logging.getLogger(__name__)
@@ -171,12 +172,23 @@ def _reconcile_enabled_entities(
     """
     registry = er.async_get(hass)
     chosen = set(coordinator.enabled_member_keys)
+    governed = {member.key for member in SELECTABLE}
     enabled = disabled = 0
 
     for entity in er.async_entries_for_config_entry(registry, entry.entry_id):
         key = _member_key_of(entity.unique_id, entry.entry_id)
-        if key is None:
-            continue  # the climate entity and the fault events are not points
+
+        # Only readable points are governed by the chosen list. A thermostat,
+        # a fault event, a command switch and a reset button are governed by
+        # whether control is on, and a command member's key is never in the
+        # chosen list — so without this they were all disabled as if they
+        # were points somebody had deselected.
+        if key is None or key not in governed:
+            if entity.disabled_by is er.RegistryEntryDisabler.INTEGRATION:
+                registry.async_update_entity(entity.entity_id, disabled_by=None)
+                enabled += 1
+            continue
+
         wanted = key in chosen
 
         if wanted and entity.disabled_by is er.RegistryEntryDisabler.INTEGRATION:

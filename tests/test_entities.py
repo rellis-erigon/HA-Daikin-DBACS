@@ -259,3 +259,26 @@ class TestPresentation:
         entity = _find(collect(sensor, entry), 0, "malfunction_code")
         assert entity.options is None
         assert entity.device_class is None
+
+
+class TestNoCommandIsEverASensor:
+    def test_an_analog_command_is_not_published_as_a_sensor(self):
+        # AirDirectionCommand is an analog value, and the earlier filter
+        # only excluded binary and multistate commands — so it appeared as a
+        # sensor on all 96 groups, reading what was last asked for rather
+        # than what the unit is doing.
+        _coordinator, entry, _state = build(
+            fake.FakeGatewayState(populated={0})
+        )
+        keys = {e.member.key for e in collect(sensor, entry)}
+        assert "air_direction_command" not in keys
+        assert "air_direction_status" in keys
+
+    def test_no_command_member_reaches_either_platform(self):
+        from custom_components.daikin_dbacs.objects import Kind
+
+        _coordinator, entry, _state = build(
+            fake.FakeGatewayState(populated={0})
+        )
+        created = collect(sensor, entry) + collect(binary_sensor, entry)
+        assert [e.member.key for e in created if e.member.kind is Kind.COMMAND] == []

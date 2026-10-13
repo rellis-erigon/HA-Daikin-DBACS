@@ -45,7 +45,7 @@ from .objects import (
     MAX_AC_NUMBER,
     MEMBERS_BY_KEY,
     PointRef,
-    READABLE,
+    SELECTABLE,
     address_label,
     is_binary_active,
     points_for,
@@ -181,7 +181,7 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         chosen = self.entry.options.get(OPT_MEMBERS)
         if not chosen:
             return DEFAULT_MEMBERS
-        known = {member.key for member in READABLE}
+        known = {member.key for member in SELECTABLE}
         return tuple(key for key in chosen if key in known)
 
     @property

@@ -317,10 +317,16 @@ VACANT: Final = MappingProxyType({
     15: "vacant",
 })
 
-#: Members read-only enough to expose before the write path exists.
+#: Members whose Present_Value is worth reading at all.
 READABLE: Final = tuple(
     m for m in _MEMBERS if m.kind is not Kind.RESET
 )
+
+#: The members the point list governs: the ones that become a sensor or a
+#: binary sensor. A command member is readable, but what it reports is what
+#: was last asked of it rather than what the unit is doing, so no entity is
+#: made from it and the point list has no say over it.
+SELECTABLE: Final = tuple(m for m in READABLE if m.kind is Kind.STATUS)
 
 #: What a fresh config entry enables.
 DEFAULT_MEMBERS: Final = tuple(m.key for m in _MEMBERS if m.default_on)
