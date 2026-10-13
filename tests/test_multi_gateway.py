@@ -14,8 +14,9 @@ import json
 
 import pytest
 
+from custom_components.daikin_dbacs import mapping
 from custom_components.daikin_dbacs.mapping import (
-    SITE_DIR,
+    SITE_DIR as REAL_SITE_DIR,
     MappingError,
     load,
     path_for,
@@ -27,15 +28,22 @@ class TestPathForGateway:
         assert path_for(11) != path_for(12)
 
     def test_the_path_is_built_from_the_instance(self):
-        assert path_for(12) == f"{SITE_DIR}/gateway-12-units.json"
+        # mapping.SITE_DIR, not the value imported at module scope: the
+        # suite redirects it per test so nothing reads the real building's
+        # mapping files. See conftest.
+        assert path_for(12) == f"{mapping.SITE_DIR}/gateway-12-units.json"
 
     def test_the_established_file_name_is_unchanged(self):
         """Gateway 11's file is already in use and must not be renamed."""
-        assert path_for(11) == f"{SITE_DIR}/gateway-11-units.json"
+        assert path_for(11) == f"{mapping.SITE_DIR}/gateway-11-units.json"
 
-    def test_it_stays_outside_the_configuration_directory(self):
-        """Site data is shared with the other bridges and is not ours."""
-        assert path_for(11).startswith("/share/")
+    def test_the_real_location_is_outside_the_configuration_directory(self):
+        """Site data is shared with the other bridges and is not ours.
+
+        This one is about the shipped default rather than the redirected
+        one, so it reads the constant as imported.
+        """
+        assert REAL_SITE_DIR.startswith("/share/")
 
     @pytest.mark.parametrize("instance", [None, "", "eleven", -1])
     def test_an_instance_that_is_not_a_number_is_refused(self, instance):
