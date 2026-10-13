@@ -11,6 +11,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import DbacsConfigEntry
 from .entity import DbacsEntity
+from .outdoor import binary_sensors as system_entities
 from .objects import Kind, Member, ObjType, READABLE, is_binary_active
 
 #: Every readable member; the coordinator narrows it per group.
@@ -35,6 +36,9 @@ async def async_setup_entry(
 ) -> None:
     """One binary sensor per binary status point a live group publishes."""
     coordinator = entry.runtime_data
+    # Outdoor units first: on a dashboard the thing that breaks belongs
+    # above the ninety-six things that report it.
+    async_add_entities(system_entities(coordinator))
     async_add_entities(
         DbacsBinarySensor(coordinator, point.ac_number, point.member)
         for ac_number in coordinator.active_groups

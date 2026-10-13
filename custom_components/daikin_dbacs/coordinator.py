@@ -136,6 +136,12 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         self.info = info
         self.discovery = Discovery()
         self.entry = entry
+        self.systems: dict[str, Any] = {}
+        """Refrigerant systems, from the site mapping file if there is one.
+
+        The gateway cannot say which units share an outdoor unit, so without
+        a mapping there are no systems — which is the honest outcome rather
+        than a guess."""
         self.hub_device_id: str | None = None
         """The registry id of the gateway's own device, set at setup."""
         self._restart_token = info.restart_token
@@ -445,6 +451,20 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
                     address_label(ac),
                     err,
                 )
+
+    def rollup(self, name: str):
+        """What one refrigerant system's indoor units add up to."""
+        from .systems import roll_up  # noqa: PLC0415 - avoids a cycle
+
+        system = self.systems.get(name)
+        if system is None:
+            return None
+        return roll_up(
+            system,
+            self.data or {},
+            set(self.active_groups),
+            {ac: self.fault_code(ac) for ac in system.ac_numbers},
+        )
 
     def fault_code(self, ac_number: int) -> str | None:
         """The Daikin two-character code for a group, if it is faulted."""

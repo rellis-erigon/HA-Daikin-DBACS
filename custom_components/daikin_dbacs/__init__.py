@@ -37,6 +37,7 @@ from .const import (
 )
 from .coordinator import DbacsCoordinator
 from .cards import generated
+from .systems import systems_from_mapping
 from .mapping import DEFAULT_PATH, MappingError, load as load_mapping, plan
 from .objects import SELECTABLE, address_label
 from .gateway import DbacsError, DbacsGateway
@@ -108,6 +109,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: DbacsConfigEntry) -> boo
     )
     coordinator.hub_device_id = hub.id
 
+    # Refrigerant systems, if the site has told us which units share one.
+    # The gateway cannot: its only outdoor information is a compressor flag
+    # on each indoor unit.
+    try:
+        site = await hass.async_add_executor_job(load_mapping)
+    except MappingError as err:
+        _LOGGER.debug("no site mapping, so no outdoor units: %s", err)
+    else:
+        coordinator.systems = systems_from_mapping(site)
+        if coordinator.systems:
+            _LOGGER.debug(
+                "%d refrigerant system(s) from the site mapping",
+                len(coordinator.systems),
+            )
+
     entry.runtime_data = coordinator
     _reconcile_enabled_entities(hass, entry, coordinator)
     _register_services(hass)
@@ -156,7 +172,7 @@ def _register_services(hass: HomeAssistant) -> None:
         dry_run = call.data.get("dry_run", True)
         path = call.data.get("path") or DEFAULT_PATH
         try:
-            mapping = load_mapping(path)
+            mapping = await hass.async_add_executor_job(load_mapping, path)
         except MappingError as err:
             raise HomeAssistantError(str(err)) from err
 

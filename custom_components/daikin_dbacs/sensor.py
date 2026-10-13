@@ -13,6 +13,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import DbacsConfigEntry
 from .entity import DbacsEntity
+from .outdoor import sensors as system_entities
 from .objects import Kind, Member, ObjType, READABLE, member_state
 
 #: Every readable member, so the platform sees the full candidate list and
@@ -32,6 +33,9 @@ async def async_setup_entry(
     object the gateway does not have could only ever be unavailable.
     """
     coordinator = entry.runtime_data
+    # Outdoor units first: on a dashboard the thing that breaks belongs
+    # above the ninety-six things that report it.
+    async_add_entities(system_entities(coordinator))
     async_add_entities(
         DbacsSensor(coordinator, point.ac_number, point.member)
         for ac_number in coordinator.active_groups

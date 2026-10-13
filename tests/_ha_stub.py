@@ -85,6 +85,10 @@ class HomeAssistant:
         self.states = _States()
         self.services = _Services()
 
+    async def async_add_executor_job(self, func, *args):
+        """Home Assistant's loop guard is right that file I/O blocks."""
+        return func(*args)
+
 
 class _Services:
     """Just enough of the service registry to register and call one."""

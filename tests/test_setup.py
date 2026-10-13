@@ -359,3 +359,28 @@ class TestOnlyPointsFollowThePointList:
         )
         run(setup(hass, entry))
         assert registry.entries[0].disabled_by == "user"
+
+
+class TestNothingBlocksTheEventLoop:
+    def test_the_site_mapping_is_read_off_the_loop(self, connects, tmp_path):
+        # Home Assistant's loop guard caught this on the first deploy:
+        # reading 96 units' worth of JSON off /share is not something to do
+        # on the event loop.
+        import json
+
+        from custom_components.daikin_dbacs import async_setup_entry as setup
+
+        path = tmp_path / "units.json"
+        path.write_text(json.dumps({"1 · 1-00": {"name": "Room A1"}}))
+
+        hass = HomeAssistant()
+        calls: list = []
+        original = hass.async_add_executor_job
+
+        async def record(func, *args):
+            calls.append(getattr(func, "__name__", str(func)))
+            return await original(func, *args)
+
+        hass.async_add_executor_job = record
+        run(setup(hass, entry_for()))
+        assert "load" in calls
