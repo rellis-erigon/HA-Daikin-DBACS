@@ -33,9 +33,13 @@ DEFAULT_LOCAL_PORT: Final = 47808
 #: low numbers are where commissioned equipment lives.
 DEFAULT_OUR_INSTANCE: Final = 4194300
 
-#: Change-of-value carries the points that want to be live, so the sweep is
-#: a safety net and a source for the rest. Five minutes, not thirty seconds.
-DEFAULT_SCAN_INTERVAL: Final = 300
+#: Change-of-value carries the four points that want to be live, so the sweep
+#: is a safety net and the source for everything else. Two minutes: setpoint
+#: and mode are not subscribed, and a change made at a wall controller should
+#: not take five minutes to appear. Measured against a production gateway, a
+#: sweep of every member of every group takes about 4.5 s, so this is well
+#: under 4% duty cycle on a gateway shared with a head-end.
+DEFAULT_SCAN_INTERVAL: Final = 120
 MIN_SCAN_INTERVAL: Final = 60
 
 #: Renewed well before it lapses. The gateway drops every subscription on a

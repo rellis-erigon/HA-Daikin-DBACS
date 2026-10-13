@@ -145,9 +145,11 @@ class TestWhichPointsAreRead:
         # The ceiling this keeps us under is 256 groups x 33 readable points.
         assert len(coordinator.points()) == 256
 
-    def test_the_sweep_interval_is_the_slow_one_by_default(self):
+    def test_the_sweep_interval_has_a_sensible_default(self):
+        # Two minutes: setpoint and mode are not among the subscribed points,
+        # so the sweep is what makes a wall-controller change show up.
         coordinator, _ = build()
-        assert coordinator.scan_interval == 300
+        assert coordinator.scan_interval == 120
 
     def test_the_sweep_interval_can_be_set(self):
         coordinator, _ = build(options={OPT_SCAN_INTERVAL: 90})

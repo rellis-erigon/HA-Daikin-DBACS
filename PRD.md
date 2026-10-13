@@ -21,7 +21,7 @@ options.
 | 3 | **Outdoor units** become synthetic devices rolled up from the indoor groups that share a refrigerant system, in Phase 4, with the mapping entered by hand. |
 | 4 | **Assume a BMS head-end is already connected** to the gateway. It is not ours, we do not disturb it, and the write path must be designed around it. |
 | 5 | **Design for the full 256 groups.** Discovery detects unpopulated and dead groups and ignores them rather than assuming a small system. |
-| 6 | **Selective COV plus a slow poll.** COV on four points per group; everything else polled on a long interval. |
+| 6 | **Selective COV plus a slow poll.** COV on four points per group; everything else polled on a long interval — 120 s, revised from 300 s once the field test in §8 measured what a sweep actually costs. |
 | 7 | **Alarms are read passively.** We never register as a BACnet event notification recipient. |
 | 8 | **Read-only probing of a live gateway is permitted** during development. Writes only in an agreed window. |
 
@@ -279,7 +279,8 @@ its own review.
    compressor, indoor fan, heater, communication status.
 6. **Selective COV plus a slow poll** (decision 6): subscribe COV on
    **run status, alarm, malfunction code and room temperature** only, and
-   poll the remaining enabled members on a long interval (default 5 minutes).
+   poll the remaining enabled members on a long interval (default 2 minutes,
+   set from the measured timings in §8).
    Subscriptions are renewed before their lifetime expires, and a detected
    gateway restart — `Database_Revision` change, or a `System_Status` of
    `DOWNLOAD_IN_PROGRESS` — rebuilds every subscription, because the gateway
@@ -584,11 +585,13 @@ would have failed silently or at the first real read:
 
 **This makes the §4.2 load worry much smaller than it looked.** The 8,960
 point ceiling is a theoretical fully-expanded gateway; a real one reads
-everything it has in under five seconds. The 300-second default sweep is
-therefore very conservative, and could reasonably go to 60–120 seconds so
-that setpoint and mode changes made at a wall controller appear promptly
-rather than up to five minutes later. That is a change to decision 6 and is
-left for review rather than taken unilaterally.
+everything it has in under five seconds.
+
+**Decision 6 was therefore revised on review: the default sweep is 120
+seconds, not 300.** Setpoint and mode are not among the subscribed points, so
+at five minutes a change made at a wall controller could take five minutes to
+appear. At two minutes the sweep still costs under 4% of the interval on a
+gateway that is not ours alone.
 
 ---
 

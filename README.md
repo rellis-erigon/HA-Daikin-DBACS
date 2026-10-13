@@ -33,7 +33,8 @@ add-on, no MQTT broker, no BACnet broadcast.
 3. Every DIII-NET indoor-unit group is found automatically, and each becomes
    its own Home Assistant device named after its address — `DBACS 2 · 1-05`.
 4. Run status, alarm, malfunction code and room temperature arrive by
-   **change-of-value** as they move. Everything else is read on a slow sweep.
+   **change-of-value** as they move. Everything else is read on a sweep,
+   every two minutes by default.
 5. Choose which points you want in **Configure** — once, applied to every
    group.
 
