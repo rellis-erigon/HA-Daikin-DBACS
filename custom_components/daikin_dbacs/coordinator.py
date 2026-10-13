@@ -145,6 +145,11 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         self._priorities: dict[str, list[int]] = {}
         self._pending: dict[str, tuple[PointRef, Any]] = {}
         self._flushing: set[str] = set()
+        self._held: dict[str, tuple[PointRef, int]] = {}
+        """Points we have written and the priority we are holding them at.
+
+        A BACnet write holds its slot until relinquished, so this is the
+        record of what Home Assistant is keeping hold of."""
         self.guard = WriteGuard(
             min_interval=float(
                 entry.options.get(
@@ -585,6 +590,7 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
             raise WriteRefused(f"{point.object_name}: {err}") from err
 
         self.guard.record(point.key, self.hass.loop.time())
+        self._held[point.key] = (point, self.write_priority)
         _LOGGER.debug(
             "wrote %r to %s at priority %d",
             value,
@@ -685,6 +691,50 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         """Re-survey priorities on the next write."""
         self._priorities.clear()
 
+    async def async_release(self, ac_number: int | None = None) -> list[str]:
+        """Let go of every priority we are holding, or one group's.
+
+        Returns what was released. A point we never wrote is not ours to
+        relinquish, so it is left alone: writing Null at a priority we do not
+        hold would be a write in its own right, and on a shared gateway that
+        is somebody else's slot to clear.
+        """
+        if not self._held:
+            return []
+
+        released: list[str] = []
+        for key, (point, priority) in list(self._held.items()):
+            if ac_number is not None and point.ac_number != ac_number:
+                continue
+            try:
+                await self.gateway.relinquish_point(point, priority)
+            except DbacsError as err:
+                _LOGGER.warning(
+                    "could not release %s at priority %d: %s",
+                    point.object_name,
+                    priority,
+                    err,
+                )
+                continue
+            self._held.pop(key, None)
+            self._priorities.pop(key, None)
+            released.append(point.object_name)
+
+        if released:
+            _LOGGER.info(
+                "released %d point(s) back to the gateway: %s",
+                len(released),
+                ", ".join(released),
+            )
+        # Whatever the unit falls back to is now the truth, and only the
+        # gateway knows what that is.
+        await self.async_request_refresh()
+        return released
+
+    @property
+    def held_points(self) -> dict[str, int]:
+        return {key: priority for key, (_p, priority) in self._held.items()}
+
     @property
     def write_summary(self) -> dict[str, Any]:
         now = self.hass.loop.time()
@@ -697,6 +747,7 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
             "written_last_24h": self.guard.summary(now),
             "pending": self.pending_writes,
             "over_half_of_allowance": self.guard.over_half,
+            "held_by_us": self.held_points,
             "priorities_held_elsewhere": {
                 key: held for key, held in self._priorities.items() if held
             },

@@ -15,7 +15,7 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
@@ -41,6 +41,8 @@ _LOGGER = logging.getLogger(__name__)
 #: Every platform is forwarded. The control ones create nothing while
 #: control is switched off, which is cheaper and less surprising than
 #: changing the platform list underneath a running entry.
+SERVICE_RELEASE_CONTROL = "release_control"
+
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
     Platform.BUTTON,
@@ -101,9 +103,56 @@ async def async_setup_entry(hass: HomeAssistant, entry: DbacsConfigEntry) -> boo
 
     entry.runtime_data = coordinator
     _reconcile_enabled_entities(hass, entry, coordinator)
+    _register_services(hass)
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
+
+
+def _register_services(hass: HomeAssistant) -> None:
+    """Register the services, once, however many gateways are set up."""
+    if hass.services.has_service(DOMAIN, SERVICE_RELEASE_CONTROL):
+        return
+
+    async def release_control(call) -> None:
+        device_id = call.data.get("device_id")
+        wanted: tuple[str, int] | None = None
+        if device_id:
+            device = dr.async_get(hass).async_get(device_id)
+            if device is None:
+                raise HomeAssistantError(f"no such device: {device_id}")
+            wanted = _entry_and_group_of(device)
+            if wanted is None:
+                raise HomeAssistantError(
+                    "that device is not a Daikin D-BACS indoor-unit group"
+                )
+
+        released: list[str] = []
+        for entry in hass.config_entries.async_entries(DOMAIN):
+            coordinator = getattr(entry, "runtime_data", None)
+            if coordinator is None:
+                continue
+            if wanted is not None and wanted[0] != entry.entry_id:
+                continue
+            released += await coordinator.async_release(
+                None if wanted is None else wanted[1]
+            )
+        _LOGGER.info("release_control released %d point(s)", len(released))
+
+    hass.services.async_register(
+        DOMAIN, SERVICE_RELEASE_CONTROL, release_control
+    )
+
+
+def _entry_and_group_of(device) -> tuple[str, int] | None:
+    """The config entry and AC number a device belongs to."""
+    for domain, identifier in device.identifiers:
+        if domain != DOMAIN or "_" not in identifier:
+            continue
+        entry_id, _, ac = identifier.rpartition("_")
+        if ac.isdigit():
+            return entry_id, int(ac)
+    return None
 
 
 def _reconcile_enabled_entities(

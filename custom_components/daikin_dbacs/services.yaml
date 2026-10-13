@@ -1,0 +1,18 @@
+release_control:
+  name: Release control
+  description: >-
+    Let go of every BACnet priority Home Assistant is holding on this
+    gateway, so each point falls back to whatever holds a lower priority —
+    or to its own default if nothing does. A BACnet write holds its priority
+    until this is done, so without it Home Assistant keeps hold of every
+    unit it has ever commanded.
+  fields:
+    device_id:
+      name: Device
+      description: >-
+        One indoor-unit group. Leave empty to release everything on every
+        gateway.
+      required: false
+      selector:
+        device:
+          integration: daikin_dbacs

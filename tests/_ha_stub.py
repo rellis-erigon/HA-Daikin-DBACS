@@ -77,12 +77,38 @@ class HomeAssistant:
         self.config_entries = _ConfigEntries()
         self.loop = _Loop()
         self.states = _States()
+        self.services = _Services()
+
+
+class _Services:
+    """Just enough of the service registry to register and call one."""
+
+    def __init__(self) -> None:
+        self.registered: dict = {}
+
+    def has_service(self, domain, service) -> bool:
+        return (domain, service) in self.registered
+
+    def async_register(self, domain, service, handler, **_kwargs) -> None:
+        self.registered[(domain, service)] = handler
+
+    async def async_call(self, domain, service, data=None) -> None:
+        await self.registered[(domain, service)](_ServiceCall(data or {}))
+
+
+class _ServiceCall:
+    def __init__(self, data: dict) -> None:
+        self.data = data
 
 
 class _ConfigEntries:
     def __init__(self) -> None:
         self.reloaded: list[str] = []
         self.forwarded: list[tuple] = []
+        self.entries: list = []
+
+    def async_entries(self, _domain=None) -> list:
+        return list(self.entries)
 
     async def async_reload(self, entry_id: str) -> None:
         self.reloaded.append(entry_id)
@@ -214,6 +240,9 @@ class DataUpdateCoordinator:
         self.data = await self._async_update_data()
 
     async def async_config_entry_first_refresh(self) -> None:
+        await self.async_refresh()
+
+    async def async_request_refresh(self) -> None:
         await self.async_refresh()
 
     def async_set_updated_data(self, data) -> None:
@@ -407,11 +436,19 @@ class _DeviceRegistry:
 
     def __init__(self) -> None:
         self.created: list = []
+        self.devices: dict = {}
 
     def async_get_or_create(self, **kwargs):
         entry = _DeviceEntry(kwargs.get("identifiers"))
         self.created.append(kwargs)
         return entry
+
+    def add_device(self, device_id, identifiers):
+        self.devices[device_id] = _DeviceEntry(identifiers)
+        return self.devices[device_id]
+
+    def async_get(self, device_id):
+        return self.devices.get(device_id)
 
 
 _REGISTRIES: dict = {}

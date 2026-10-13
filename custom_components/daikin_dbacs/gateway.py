@@ -711,10 +711,32 @@ class DbacsGateway:
             return held
         return []
 
+    async def relinquish_point(
+        self, point: PointRef, priority: int = DEFAULT_WRITE_PRIORITY
+    ) -> None:
+        """Let go of a priority slot, so the object falls back to whatever
+        holds a lower one — or to its Relinquish_Default if nothing does.
+
+        A BACnet write *holds* its priority until this is done. Without it,
+        turning a unit on once would leave Home Assistant holding that unit's
+        power at priority 16 for good, which is the same trap as a head-end
+        holding a point, with us as the stuck holder.
+
+        Relinquishing is BACnet Null written at the same priority, which
+        bacpypes3 wants as an actual Null instance rather than None.
+        """
+        from bacpypes3.primitivedata import Null  # noqa: PLC0415
+
+        await self.write_point(point, Null(()), priority=priority)
+
     async def write_point(
         self, point: PointRef, value: Any, priority: int = DEFAULT_WRITE_PRIORITY
     ) -> None:
-        """Write one point's Present_Value at a given BACnet priority."""
+        """Write one point's Present_Value at a given BACnet priority.
+
+        The value holds that priority until it is relinquished — see
+        relinquish_point.
+        """
         if self._app is None:
             raise DbacsUnreachable("not connected")
         if not 1 <= priority <= 16:

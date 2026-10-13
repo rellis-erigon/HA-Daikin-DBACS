@@ -429,3 +429,72 @@ class TestFaultEvents:
         run(coordinator.async_refresh())
         entity._handle_coordinator_update()
         assert len(entity.events) == 1
+
+
+class TestLettingGo:
+    """A BACnet write holds its priority until it is relinquished.
+
+    Without this, turning one unit on would leave Home Assistant holding
+    that unit's power at priority 16 for good — the same trap as a head-end
+    holding a point, with us as the stuck holder.
+    """
+
+    def test_a_write_is_recorded_as_held(self):
+        coordinator, entry, state, _h = build()
+        entity = find(collect(climate, entry), 0)
+        run(entity.async_turn_on())
+        point = PointRef(0, MEMBERS_BY_KEY["on_off_command"])
+        assert coordinator.held_points == {point.key: 16}
+
+    def test_releasing_writes_null_at_the_same_priority(self):
+        from bacpypes3.primitivedata import Null
+
+        coordinator, entry, state, _h = build()
+        entity = find(collect(climate, entry), 0)
+        run(entity.async_turn_on())
+        state.writes.clear()
+
+        released = run(coordinator.async_release())
+
+        assert released == ["StartStopCommand_000"]
+        assert len(state.writes) == 1
+        _type, _instance, value, priority = state.writes[0]
+        assert isinstance(value, Null)
+        assert priority == 16
+
+    def test_releasing_forgets_what_was_held(self):
+        coordinator, entry, _s, _h = build()
+        entity = find(collect(climate, entry), 0)
+        run(entity.async_turn_on())
+        run(coordinator.async_release())
+        assert coordinator.held_points == {}
+
+    def test_one_group_can_be_released_on_its_own(self):
+        coordinator, entry, state, _h = build()
+        entities = collect(climate, entry)
+        run(find(entities, 0).async_turn_on())
+        run(find(entities, 1).async_turn_off())
+        state.writes.clear()
+
+        released = run(coordinator.async_release(ac_number=1))
+
+        assert released == ["StartStopCommand_001"]
+        # Group 0 is still ours and still held.
+        assert list(coordinator.held_points) == ["0_on_off_command"]
+
+    def test_a_point_we_never_wrote_is_not_ours_to_release(self):
+        # Writing Null at a priority we do not hold is a write in its own
+        # right, and on a shared gateway that is somebody else's slot.
+        coordinator, entry, state, _h = build()
+        assert run(coordinator.async_release()) == []
+        assert state.writes == []
+
+    def test_a_refusal_to_release_is_reported_not_swallowed(self, caplog):
+        coordinator, entry, state, _h = build()
+        entity = find(collect(climate, entry), 0)
+        run(entity.async_turn_on())
+        state.refuse_writes = True
+        assert run(coordinator.async_release()) == []
+        assert "could not release" in caplog.text
+        # Still recorded as held, because it still is.
+        assert coordinator.held_points
