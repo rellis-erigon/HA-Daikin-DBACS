@@ -59,6 +59,12 @@ class _Loop:
         self.now += seconds
 
 
+class _SupportsResponse(StrEnum):
+    NONE = "none"
+    OPTIONAL = "optional"
+    ONLY = "only"
+
+
 class _States:
     """The state machine, only as far as removing a state."""
 
@@ -426,9 +432,11 @@ class UnitOfEnergy(StrEnum):
 
 
 class _DeviceEntry:
-    def __init__(self, identifiers) -> None:
-        self.id = "hub_device_id"
+    def __init__(self, identifiers, device_id="hub_device_id") -> None:
+        self.id = device_id
         self.identifiers = identifiers
+        self.name_by_user = None
+        self.area_id = None
 
 
 class _DeviceRegistry:
@@ -437,6 +445,7 @@ class _DeviceRegistry:
     def __init__(self) -> None:
         self.created: list = []
         self.devices: dict = {}
+        self.updated: list = []
 
     def async_get_or_create(self, **kwargs):
         entry = _DeviceEntry(kwargs.get("identifiers"))
@@ -449,6 +458,21 @@ class _DeviceRegistry:
 
     def async_get(self, device_id):
         return self.devices.get(device_id)
+
+    def async_get_device(self, identifiers=None, **_kwargs):
+        for device in self.devices.values():
+            if identifiers and set(identifiers) & set(device.identifiers or ()):
+                return device
+        return None
+
+    def async_update_device(self, device_id, **changes):
+        device = self.devices.get(device_id)
+        if device is None:
+            return None
+        for key, value in changes.items():
+            setattr(device, key, value)
+        self.updated.append((device_id, changes))
+        return device
 
 
 _REGISTRIES: dict = {}
@@ -469,6 +493,35 @@ class _RegistryEntry:
         self.entity_id = entity_id
         self.unique_id = unique_id
         self.disabled_by = disabled_by
+
+
+class _Area:
+    def __init__(self, name, area_id) -> None:
+        self.name = name
+        self.id = area_id
+
+
+class _AreaRegistry:
+    def __init__(self) -> None:
+        self.areas: list = []
+
+    def add(self, name) -> _Area:
+        area = _Area(name, name.lower().replace(" ", "_").replace("-", "_"))
+        self.areas.append(area)
+        return area
+
+    def async_list_areas(self) -> list:
+        return list(self.areas)
+
+    def async_create(self, name) -> _Area:
+        return self.add(name)
+
+
+_AREA_REGISTRIES: dict = {}
+
+
+def _area_registry(hass):
+    return _AREA_REGISTRIES.setdefault(id(hass), _AreaRegistry())
 
 
 class _EntityRegistry:
@@ -556,7 +609,12 @@ def install() -> None:
         UnitOfEnergy=UnitOfEnergy,
         ATTR_TEMPERATURE="temperature",
     )
-    _module("homeassistant.core", HomeAssistant=HomeAssistant, callback=callback)
+    _module(
+        "homeassistant.core",
+        HomeAssistant=HomeAssistant,
+        callback=callback,
+        SupportsResponse=_SupportsResponse,
+    )
     _module(
         "homeassistant.config_entries",
         ConfigEntry=ConfigEntry,
@@ -611,6 +669,10 @@ def install() -> None:
         AddConfigEntryEntitiesCallback=object,
     )
     _module(
+        "homeassistant.helpers.area_registry",
+        async_get=_area_registry,
+    )
+    _module(
         "homeassistant.helpers.entity_registry",
         async_get=_entity_registry,
         async_entries_for_config_entry=_entries_for_config_entry,
@@ -618,6 +680,7 @@ def install() -> None:
     )
     _selector_module()
 
+    helpers.area_registry = sys.modules["homeassistant.helpers.area_registry"]
     helpers.entity_registry = sys.modules["homeassistant.helpers.entity_registry"]
     helpers.selector = sys.modules["homeassistant.helpers.selector"]
     helpers.update_coordinator = sys.modules[

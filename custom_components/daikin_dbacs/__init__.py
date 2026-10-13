@@ -11,12 +11,14 @@ building is a separate piece of work with its own review — see PRD.md.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, SupportsResponse
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import entity_registry as er
 
 from .const import (
@@ -34,6 +36,7 @@ from .const import (
     MODEL,
 )
 from .coordinator import DbacsCoordinator
+from .mapping import DEFAULT_PATH, MappingError, load as load_mapping, plan
 from .objects import SELECTABLE
 from .gateway import DbacsError, DbacsGateway
 
@@ -43,6 +46,7 @@ _LOGGER = logging.getLogger(__name__)
 #: control is switched off, which is cheaper and less surprising than
 #: changing the platform list underneath a running entry.
 SERVICE_RELEASE_CONTROL = "release_control"
+SERVICE_APPLY_MAPPING = "apply_mapping"
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
@@ -140,8 +144,89 @@ def _register_services(hass: HomeAssistant) -> None:
             )
         _LOGGER.info("release_control released %d point(s)", len(released))
 
+    async def apply_mapping(call) -> dict[str, Any]:
+        """Name and place the discovered units from a site mapping file.
+
+        Reports by default. A dry run is the same code path as the real
+        thing — the plan is computed, then applied or not — so what you are
+        shown is what would happen rather than a description of it.
+        """
+        dry_run = call.data.get("dry_run", True)
+        path = call.data.get("path") or DEFAULT_PATH
+        try:
+            mapping = load_mapping(path)
+        except MappingError as err:
+            raise HomeAssistantError(str(err)) from err
+
+        devices = dr.async_get(hass)
+        areas = ar.async_get(hass)
+        existing = {
+            area.name: area.id for area in areas.async_list_areas()
+        }
+
+        report: dict[str, Any] = {"gateways": []}
+        for entry in hass.config_entries.async_entries(DOMAIN):
+            coordinator = getattr(entry, "runtime_data", None)
+            if coordinator is None:
+                continue
+
+            live: dict[int, Any] = {}
+            for ac_number in coordinator.active_groups:
+                device = devices.async_get_device(
+                    identifiers={(DOMAIN, f"{entry.entry_id}_{ac_number}")}
+                )
+                if device is not None:
+                    live[ac_number] = device
+
+            outcome = plan(
+                mapping,
+                live,
+                set_names=call.data.get("set_names", True),
+                set_areas=call.data.get("set_areas", True),
+                existing_areas=existing,
+                overwrite=call.data.get("overwrite", False),
+            )
+
+            if not dry_run:
+                for change in outcome.changes:
+                    device = live.get(change.ac_number)
+                    if device is None:
+                        continue
+                    if change.field == "name":
+                        devices.async_update_device(
+                            device.id, name_by_user=change.new
+                        )
+                        change.applied = True
+                    elif change.field == "area":
+                        area_id = existing.get(change.new)
+                        if area_id is None:
+                            area_id = areas.async_create(change.new).id
+                            existing[change.new] = area_id
+                        devices.async_update_device(device.id, area_id=area_id)
+                        change.applied = True
+
+            summary = outcome.summary()
+            summary["gateway"] = entry.title
+            summary["dry_run"] = bool(dry_run)
+            summary["mapping_file"] = path
+            report["gateways"].append(summary)
+            _LOGGER.info(
+                "apply_mapping on %s: %d change(s), %s",
+                entry.title,
+                len(outcome.changes),
+                "reported only" if dry_run else "applied",
+            )
+
+        return report
+
     hass.services.async_register(
         DOMAIN, SERVICE_RELEASE_CONTROL, release_control
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_APPLY_MAPPING,
+        apply_mapping,
+        supports_response=SupportsResponse.OPTIONAL,
     )
 
 

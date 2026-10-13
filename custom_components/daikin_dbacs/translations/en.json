@@ -75,6 +75,32 @@
           "description": "One indoor-unit group. Leave empty to release everything on every gateway."
         }
       }
+    },
+    "apply_mapping": {
+      "name": "Apply site mapping",
+      "description": "Name and place the discovered indoor units from a mapping file. The gateway knows a unit only by its DIII-NET address, so room names, areas and equipment tags come from a file you maintain and never from this integration. Reports what it would do by default.",
+      "fields": {
+        "dry_run": {
+          "name": "Dry run",
+          "description": "Report the changes without making them."
+        },
+        "path": {
+          "name": "Mapping file",
+          "description": "Where the file is."
+        },
+        "set_names": {
+          "name": "Set names",
+          "description": "Rename devices from the file."
+        },
+        "set_areas": {
+          "name": "Set areas",
+          "description": "Areas named in the file are created if they do not exist."
+        },
+        "overwrite": {
+          "name": "Overwrite choices made by hand",
+          "description": "Off by default; a device somebody renamed or placed themselves is left alone."
+        }
+      }
     }
   }
 }

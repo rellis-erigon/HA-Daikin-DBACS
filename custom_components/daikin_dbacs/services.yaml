@@ -16,3 +16,53 @@ release_control:
       selector:
         device:
           integration: daikin_dbacs
+
+apply_mapping:
+  name: Apply site mapping
+  description: >-
+    Name and place the discovered indoor units from a mapping file. The
+    gateway knows a unit only by its DIII-NET address, so room names, areas
+    and equipment tags come from a file you maintain — a commissioning
+    report or a schedule — and never from this integration. Reports what it
+    would do by default.
+  fields:
+    dry_run:
+      name: Dry run
+      description: >-
+        Report the changes without making them. On by default, because this
+        renames and moves every device it matches.
+      required: false
+      default: true
+      selector:
+        boolean:
+    path:
+      name: Mapping file
+      description: >-
+        Where the file is. Defaults to
+        /share/HA-Daikin-DBACS-site/gateway-11-units.json.
+      required: false
+      example: /share/HA-Daikin-DBACS-site/gateway-11-units.json
+      selector:
+        text:
+    set_names:
+      name: Set names
+      required: false
+      default: true
+      selector:
+        boolean:
+    set_areas:
+      name: Set areas
+      description: Areas named in the file are created if they do not exist.
+      required: false
+      default: true
+      selector:
+        boolean:
+    overwrite:
+      name: Overwrite choices made by hand
+      description: >-
+        Off by default. A device somebody has renamed or placed themselves
+        is left alone, because they knew something the file does not.
+      required: false
+      default: false
+      selector:
+        boolean:
