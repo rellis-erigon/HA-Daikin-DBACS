@@ -159,7 +159,7 @@ class TestValues:
         _coordinator, entry, _state = build()
         entity = _find(collect(sensor, entry), 1, "room_temp")
         attributes = entity.extra_state_attributes
-        assert attributes["bacnet_object"] == "RoomTemp_1"
+        assert attributes["bacnet_object"] == "RoomTemp_001"
         assert attributes["bacnet_instance"] == "265"
         assert attributes["diii_address"] == "1 · 1-01"
 

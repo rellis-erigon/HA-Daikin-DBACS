@@ -428,8 +428,15 @@ class PointRef:
 
     @property
     def object_name(self) -> str:
-        """Daikin's own name for this object, with the group suffix."""
-        return f"{self.member.object_name}_{self.ac_number}"
+        """Daikin's own name for this object, exactly as the gateway spells it.
+
+        The group number is zero-padded to three digits —
+        ``StartStopStatus_016``, not ``_16`` — which is how a real gateway
+        reports its Object_Name. This is published as an entity attribute, so
+        anyone cross-referencing it against a BACnet tool has to find the
+        same string.
+        """
+        return f"{self.member.object_name}_{self.ac_number:03d}"
 
     @property
     def key(self) -> str:

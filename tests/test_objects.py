@@ -216,7 +216,9 @@ class TestStateLabels:
 class TestPointRefs:
     def test_names_the_object_the_way_the_gateway_does(self):
         point = o.PointRef(5, o.MEMBERS[9])
-        assert point.object_name == "RoomTemp_5"
+        # Three digits, because that is how the gateway spells it, and the
+        # name is published as an attribute for cross-referencing.
+        assert point.object_name == "RoomTemp_005"
         # bacpypes3 rejects a plain tuple, so the identifier is written
         # the way it parses.
         assert point.object_id == "analog-input,1289"
