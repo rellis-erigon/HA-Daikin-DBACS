@@ -29,9 +29,9 @@ def write(tmp_path, data) -> str:
 
 class TestReadingTheFile:
     def test_the_address_as_the_integration_writes_it(self, tmp_path):
-        path = write(tmp_path, {"1 · 2-14": {"name": "Room 412"}})
+        path = write(tmp_path, {"1 · 2-14": {"name": "Room A1"}})
         loaded = mapping.load(path)
-        assert loaded[30].name == "Room 412"  # port 1, line 2, group 14
+        assert loaded[30].name == "Room A1"  # port 1, line 2, group 14
 
     @pytest.mark.parametrize(
         "key", ["1 · 2-14", "1 2-14", "1-2-14", "1/2/14", "P1 L2 G14"]
@@ -39,8 +39,8 @@ class TestReadingTheFile:
     def test_the_address_however_it_was_typed(self, tmp_path, key):
         # The file is maintained by hand. Rejecting it over a middle dot
         # would be absurd.
-        path = write(tmp_path, {key: {"name": "Room 412"}})
-        assert mapping.load(path)[30].name == "Room 412"
+        path = write(tmp_path, {key: {"name": "Room A1"}})
+        assert mapping.load(path)[30].name == "Room A1"
 
     def test_an_explicit_ac_number_wins(self, tmp_path):
         path = write(tmp_path, {"whatever": {"ac_number": 30, "name": "X"}})
@@ -48,12 +48,12 @@ class TestReadingTheFile:
 
     def test_every_field_is_read(self, tmp_path):
         path = write(tmp_path, {"2 · 1-00": {
-            "name": "Room 457", "area": "L4 Accommodation", "tag": "ACU L4-09",
-            "model": "FXDQ40TV1B", "system": "H-23", "outdoor": "CU-H-23",
+            "name": "Room A2", "area": "Block A", "tag": "ACU A-09",
+            "model": "FXDQ40TV1B", "system": "S-01", "outdoor": "CU-S-01",
         }})
         entry = mapping.load(path)[64]
-        assert entry.tag == "ACU L4-09"
-        assert entry.outdoor == "CU-H-23"
+        assert entry.tag == "ACU A-09"
+        assert entry.outdoor == "CU-S-01"
         assert entry.label == "2 · 1-00"
 
     def test_a_missing_file_says_what_it_is_for(self, tmp_path):
@@ -77,7 +77,7 @@ class TestReadingTheFile:
     def test_an_unreadable_address_is_skipped_not_fatal(self, tmp_path):
         path = write(tmp_path, {
             "nonsense": {"name": "ignored"},
-            "1 · 1-00": {"name": "Room 401"},
+            "1 · 1-00": {"name": "Room A1"},
         })
         loaded = mapping.load(path)
         assert list(loaded) == [0]
@@ -97,20 +97,20 @@ class TestReadingTheFile:
 class TestThePlan:
     def _mapping(self):
         return {
-            0: mapping.UnitMapping(0, name="Room 401 Bed", area="L4 Accommodation"),
-            1: mapping.UnitMapping(1, name="Room 403", area="L4 Accommodation"),
+            0: mapping.UnitMapping(0, name="Room A1 Bed", area="Block A"),
+            1: mapping.UnitMapping(1, name="Room A2", area="Block A"),
         }
 
     def test_an_unnamed_unplaced_device_gets_both(self):
         result = mapping.plan(self._mapping(), {0: _Device()})
         fields = {c.field for c in result.changes}
         assert fields == {"name", "area"}
-        assert result.areas_to_create == ["L4 Accommodation"]
+        assert result.areas_to_create == ["Block A"]
 
     def test_an_existing_area_is_not_created_again(self):
         result = mapping.plan(
             self._mapping(), {0: _Device()},
-            existing_areas={"L4 Accommodation": "l4_acc"},
+            existing_areas={"Block A": "block_a"},
         )
         assert result.areas_to_create == []
         assert [c.field for c in result.changes] == ["name", "area"]
@@ -118,7 +118,7 @@ class TestThePlan:
     def test_area_matching_ignores_case_and_padding(self):
         result = mapping.plan(
             self._mapping(), {0: _Device()},
-            existing_areas={"  l4 ACCOMMODATION ": "l4_acc"},
+            existing_areas={"  block A ": "block_a"},
         )
         assert result.areas_to_create == []
 
@@ -146,7 +146,7 @@ class TestThePlan:
 
     def test_nothing_changes_when_it_already_matches(self):
         result = mapping.plan(
-            self._mapping(), {0: _Device(name_by_user="Room 401 Bed")},
+            self._mapping(), {0: _Device(name_by_user="Room A1 Bed")},
             set_areas=False, overwrite=True,
         )
         assert result.changes == []

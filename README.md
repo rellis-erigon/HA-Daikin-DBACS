@@ -195,6 +195,54 @@ Two things to know:
   mention it. The integration watches the device object for a restart and
   rebuilds them.
 
+## Site data stays out of this repository
+
+The gateway knows an indoor unit by its DIII-NET address and nothing else —
+there is no name object and every description is empty. So room names,
+areas and equipment tags come from a mapping file you maintain, read at
+runtime:
+
+```yaml
+action: daikin_dbacs.apply_mapping
+data:
+  dry_run: true          # reports; set false to apply
+```
+
+It defaults to `/share/HA-Daikin-DBACS-site/gateway-11-units.json`, keyed by
+the DIII address as the integration reports it:
+
+```json
+{
+  "1 \u00b7 1-00": {
+    "name": "Room A1 Bed ACU A-01",
+    "area": "Block A",
+    "tag": "ACU A-01",
+    "system": "S-01",
+    "outdoor": "CU-S-01"
+  }
+}
+```
+
+The address is read forgivingly — `"1 · 1-00"`, `"1 1-00"`, `"1-1-00"` or an
+explicit `ac_number` all work, because the file is maintained by hand.
+
+Two things it will not do. **A device you renamed or placed yourself is left
+alone**, because you knew something the file does not; pass `overwrite: true`
+if you mean it. And **it reports before it acts** — `dry_run` defaults to
+true, since this renames every device it matches.
+
+**No mapping is shipped here, and none ever will be.** This repository is
+public and `scripts/check-no-site-detail.py` fails the build on real room
+numbers, equipment tags, outdoor unit names and private IP addresses. Run it
+before committing anything you copied off a site:
+
+```bash
+python3 scripts/check-no-site-detail.py
+```
+
+A real room number reached a test file here within a day of the mapping work
+starting. That is why it is a check and not a note.
+
 ## Installing
 
 Add this repository to HACS as a custom **Integration** repository, install,

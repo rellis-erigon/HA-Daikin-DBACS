@@ -6,6 +6,20 @@ on:
   pull_request:
 
 jobs:
+  site-detail:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      # This repository is public, and the system it was developed against
+      # is a working hotel. A real room number reached a test here within a
+      # day of the mapping work starting, which is why this is a build
+      # check rather than care.
+      - name: No site-specific detail
+        run: python3 scripts/check-no-site-detail.py
+
   pytest:
     runs-on: ubuntu-latest
     steps:
