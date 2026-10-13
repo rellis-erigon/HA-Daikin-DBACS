@@ -16,6 +16,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import device_registry as dr
 
 from .const import (
     CONF_DEVICE_INSTANCE,
@@ -27,6 +28,9 @@ from .const import (
     DEFAULT_LOCAL_PORT,
     DEFAULT_OUR_INSTANCE,
     DEFAULT_PORT,
+    DOMAIN,
+    MANUFACTURER,
+    MODEL,
 )
 from .coordinator import DbacsCoordinator
 from .gateway import DbacsError, DbacsGateway
@@ -69,6 +73,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: DbacsConfigEntry) -> boo
         raise
 
     await coordinator.async_setup_cov()
+
+    # The gateway itself is a device, so the 96 indoor-unit groups have
+    # something real to hang off. Registering it here rather than implying it
+    # from an entity means `via_device_id` points at a device that exists.
+    registry = dr.async_get(hass)
+    hub = registry.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, entry.entry_id)},
+        name=info.object_name or f"D-BACS {entry.data[CONF_HOST]}",
+        manufacturer=info.vendor_name or MANUFACTURER,
+        model=info.model_name or MODEL,
+        sw_version=info.application_software_version or info.firmware_revision,
+    )
+    coordinator.hub_device_id = hub.id
 
     entry.runtime_data = coordinator
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))

@@ -125,6 +125,8 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         self.info = info
         self.discovery = Discovery()
         self.entry = entry
+        self.hub_device_id: str | None = None
+        """The registry id of the gateway's own device, set at setup."""
         self._restart_token = info.restart_token
         self._cov_points: dict[str, PointRef] = {}
         self._cov_failed: set[str] = set()

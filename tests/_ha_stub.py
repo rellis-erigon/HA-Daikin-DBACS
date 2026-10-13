@@ -272,6 +272,31 @@ class UnitOfEnergy(StrEnum):
     KILO_WATT_HOUR = "kWh"
 
 
+class _DeviceEntry:
+    def __init__(self, identifiers) -> None:
+        self.id = "hub_device_id"
+        self.identifiers = identifiers
+
+
+class _DeviceRegistry:
+    """Records what was registered, so a test can check the hub exists."""
+
+    def __init__(self) -> None:
+        self.created: list = []
+
+    def async_get_or_create(self, **kwargs):
+        entry = _DeviceEntry(kwargs.get("identifiers"))
+        self.created.append(kwargs)
+        return entry
+
+
+_REGISTRIES: dict = {}
+
+
+def _device_registry(hass):
+    return _REGISTRIES.setdefault(id(hass), _DeviceRegistry())
+
+
 def _selector_module() -> types.ModuleType:
     """Selectors that only have to remember what they were given."""
 
@@ -358,7 +383,11 @@ def install() -> None:
         UpdateFailed=UpdateFailed,
         CoordinatorEntity=CoordinatorEntity,
     )
-    _module("homeassistant.helpers.device_registry", DeviceInfo=dict)
+    _module(
+        "homeassistant.helpers.device_registry",
+        DeviceInfo=dict,
+        async_get=_device_registry,
+    )
     _module(
         "homeassistant.helpers.entity_platform",
         AddConfigEntryEntitiesCallback=object,

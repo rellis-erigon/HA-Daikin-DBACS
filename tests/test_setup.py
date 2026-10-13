@@ -128,3 +128,41 @@ class TestDiagnostics:
         )
         assert report["discovery"]["dead"] == ["1 · 1-01"]
         assert report["discovery"]["live"] == ["1 · 1-00"]
+
+
+class TestTheGatewayIsADevice:
+    def test_the_gateway_itself_is_registered(self, connects):
+        # The 96 group devices need something real to hang off, and
+        # via_device_id has to point at a device that exists rather than at
+        # an identifier nothing ever created.
+        from homeassistant.helpers import device_registry as dr
+
+        hass = HomeAssistant()
+        entry = entry_for()
+        run(async_setup_entry(hass, entry))
+
+        created = dr.async_get(hass).created
+        assert len(created) == 1
+        hub = created[0]
+        assert hub["name"] == "D-BACS-TEST"
+        assert hub["model"] == "DMS502B71"
+        assert hub["manufacturer"] == "Daikin Industries"
+        assert entry.runtime_data.hub_device_id == "hub_device_id"
+
+    def test_groups_hang_off_the_gateway(self, connects):
+        from custom_components.daikin_dbacs import sensor
+
+        hass = HomeAssistant()
+        entry = entry_for()
+        run(async_setup_entry(hass, entry))
+
+        created: list = []
+        run(
+            sensor.async_setup_entry(
+                hass, entry, lambda entities: created.extend(entities)
+            )
+        )
+        assert created
+        for entity in created:
+            assert entity.device_info["via_device_id"] == "hub_device_id"
+            assert "via_device" not in entity.device_info

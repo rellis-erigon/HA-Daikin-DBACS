@@ -75,6 +75,8 @@ class DbacsSensor(DbacsEntity, SensorEntity):
             # rather than documented, and a wrong device class would put it
             # on the energy dashboard as a fact.
             self._attr_state_class = SensorStateClass.TOTAL_INCREASING
+        elif member.key == "malfunction_code":
+            pass  # free text: a Daikin code, or Normal
         elif member.states:
             self._attr_device_class = SensorDeviceClass.ENUM
             # Daikin leaves a documented hole in the mode enumeration, and a
@@ -88,11 +90,25 @@ class DbacsSensor(DbacsEntity, SensorEntity):
         reading = self.reading
         if reading is None or not reading.ok:
             return None
-        if self.member.unit in ("temperature", "energy"):
+
+        if self.member.key == "malfunction_code":
+            return self._fault_state(reading.value)
+
+        if self.member.unit == "temperature":
+            # The gateway sends float32, so a room temperature arrives as
+            # 27.2000007629395. Rounded here rather than only in the display
+            # precision, because the raw value is what gets recorded.
+            try:
+                return round(float(reading.value), 1)
+            except (TypeError, ValueError):
+                return None
+
+        if self.member.unit in ("energy", "volume"):
             try:
                 return float(reading.value)
             except (TypeError, ValueError):
                 return None
+
         labelled = member_state(self.member, reading.value)
         if labelled is not None:
             return labelled
@@ -100,6 +116,23 @@ class DbacsSensor(DbacsEntity, SensorEntity):
             return float(reading.value)
         except (TypeError, ValueError):
             return None
+
+    def _fault_state(self, value: object) -> str | None:
+        """The Daikin fault code, which is the point of this sensor.
+
+        The object's own value is an index into a table Daikin publishes
+        separately; the two-character code lives in the object's Description
+        and is what an engineer actually needs. The index stays available as
+        an attribute.
+        """
+        code = self.coordinator.fault_code(self.ac_number)
+        if code:
+            return code
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            return None
+        return "Normal" if index <= 1 else str(index)
 
     @property
     def extra_state_attributes(self) -> dict[str, str] | None:

@@ -574,6 +574,26 @@ would have failed silently or at the first real read:
   as integers or strings, and temperatures arrive as float32 artefacts
   (`21.600000381469727`), so both need normalising.
 
+**Phase 1 now runs in Home Assistant against that gateway.** It loaded, bound
+its UDP port, installed `bacpypes3` from the manifest, discovered the system,
+registered the gateway as a device with every indoor-unit group hanging off
+it, and reported a value on every enabled entity with none unavailable. Two
+presentation faults only live data could show:
+
+- Room temperatures arrive as float32 and were recorded as
+  `27.2000007629395`. Rounded in `native_value` rather than only in the
+  display precision, because the raw value is what long-term statistics keep.
+- The malfunction code sensor read `54.0`. The value is an index into a table
+  Daikin publishes separately, and the two-character code an engineer needs is
+  in the object's Description — so the sensor now reads the code, or
+  `Normal`, with the index kept as an attribute. A unit in genuine alarm
+  exercised that path and returned `E5`.
+
+One deprecation also turned up a real bug: `via_device` is on its way out, and
+it had been pointing at a hub device the integration never created. The
+gateway is now registered as a device in its own right and groups link to it
+by registry id.
+
 **Measured, on a system with most of one DIII-NET port populated:**
 
 | | |

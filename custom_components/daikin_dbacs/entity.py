@@ -40,9 +40,13 @@ class DbacsEntity(CoordinatorEntity[DbacsCoordinator]):
             name=f"DBACS {address_label(ac_number)}",
             manufacturer=MANUFACTURER,
             model=MODEL,
-            via_device=(DOMAIN, entry_id),
             serial_number=f"D3 {port}-{line}-{group:02d}",
         )
+        # Hang the group off the gateway's own device, by registry id rather
+        # than by identifier: `via_device` is deprecated, and it silently
+        # tolerated pointing at a device that had never been created.
+        if coordinator.hub_device_id is not None:
+            self._attr_device_info["via_device_id"] = coordinator.hub_device_id
 
     @property
     def reading(self) -> PointValue | None:

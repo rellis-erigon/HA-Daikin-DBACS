@@ -222,3 +222,40 @@ def _find(entities, ac_number, member_key):
         for e in entities
         if e.ac_number == ac_number and e.member.key == member_key
     )
+
+
+class TestPresentation:
+    def test_a_temperature_is_rounded(self):
+        # The gateway sends float32, so a reading arrives as
+        # 27.2000007629395. The raw value is what gets recorded, so it is
+        # rounded here rather than only in the display precision.
+        coordinator, entry, _state = build()
+        entity = _find(collect(sensor, entry), 0, "room_temp")
+        coordinator.data[entity.point.key] = gw.PointValue(
+            entity.point, value=27.2000007629395
+        )
+        assert entity.native_value == 27.2
+
+    def test_a_healthy_unit_reads_normal_not_a_number(self):
+        coordinator, entry, _state = build(
+            fake.FakeGatewayState(populated={0})
+        )
+        entity = _find(collect(sensor, entry), 0, "malfunction_code")
+        assert entity.native_value == "Normal"
+
+    def test_a_faulted_unit_reads_its_daikin_code(self):
+        # The object's value is an index into a table Daikin publishes
+        # separately. The two-character code is what an engineer needs.
+        state = fake.FakeGatewayState(populated={0}, faulted={0})
+        coordinator, entry, _state = build(state)
+        entity = _find(collect(sensor, entry), 0, "malfunction_code")
+        assert entity.native_value == "U1"
+        assert entity.extra_state_attributes["raw_value"] == "42"
+
+    def test_a_fault_code_carries_no_enum_options(self):
+        coordinator, entry, _state = build(
+            fake.FakeGatewayState(populated={0})
+        )
+        entity = _find(collect(sensor, entry), 0, "malfunction_code")
+        assert entity.options is None
+        assert entity.device_class is None
