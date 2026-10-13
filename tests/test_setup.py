@@ -166,3 +166,89 @@ class TestTheGatewayIsADevice:
         for entity in created:
             assert entity.device_info["via_device_id"] == "hub_device_id"
             assert "via_device" not in entity.device_info
+
+
+class TestThePointSelectionIsHonoured:
+    """Adding a point in the options has to actually enable its entities.
+
+    `entity_registry_enabled_default` only applies when an entity is first
+    created, so without reconciling, a point switched on later stayed
+    disabled from a previous run and was never read again — which made the
+    bulk enable and disable this integration advertises do nothing after the
+    first setup.
+    """
+
+    def _registry(self, hass, entry):
+        from homeassistant.helpers import entity_registry as er
+
+        registry = er.async_get(hass)
+        registry.entries.clear()
+        return registry, er
+
+    def test_a_point_switched_on_later_is_re_enabled(self, connects):
+        from custom_components.daikin_dbacs import async_setup_entry as setup
+
+        hass = HomeAssistant()
+        entry = entry_for({OPT_MEMBERS: ["room_temp", "heater_status"]})
+        registry, er = self._registry(hass, entry)
+        # As a previous run left it: we disabled it, because it was not chosen.
+        registry.add(
+            "binary_sensor.dbacs_heater",
+            f"{entry.entry_id}_0_heater_status",
+            disabled_by=er.RegistryEntryDisabler.INTEGRATION,
+        )
+
+        run(setup(hass, entry))
+        assert registry.entries[0].disabled_by is None
+
+    def test_a_point_switched_off_is_disabled(self, connects):
+        from custom_components.daikin_dbacs import async_setup_entry as setup
+
+        hass = HomeAssistant()
+        entry = entry_for({OPT_MEMBERS: ["room_temp"]})
+        registry, _er = self._registry(hass, entry)
+        registry.add(
+            "binary_sensor.dbacs_heater", f"{entry.entry_id}_0_heater_status"
+        )
+
+        run(setup(hass, entry))
+        assert registry.entries[0].disabled_by == "integration"
+
+    def test_a_point_switched_off_by_hand_stays_off(self, connects):
+        from custom_components.daikin_dbacs import async_setup_entry as setup
+
+        hass = HomeAssistant()
+        entry = entry_for({OPT_MEMBERS: ["room_temp"]})
+        registry, er = self._registry(hass, entry)
+        registry.add(
+            "sensor.dbacs_room_temp",
+            f"{entry.entry_id}_0_room_temp",
+            disabled_by=er.RegistryEntryDisabler.USER,
+        )
+
+        run(setup(hass, entry))
+        # Chosen in the options, but somebody turned it off deliberately.
+        assert registry.entries[0].disabled_by == "user"
+
+    def test_the_climate_entity_is_not_treated_as_a_point(self, connects):
+        from custom_components.daikin_dbacs import async_setup_entry as setup
+
+        hass = HomeAssistant()
+        entry = entry_for({OPT_MEMBERS: ["room_temp"]})
+        registry, _er = self._registry(hass, entry)
+        registry.add("climate.dbacs_0", f"{entry.entry_id}_0_climate")
+        registry.add("event.dbacs_0_fault", f"{entry.entry_id}_0_fault_event")
+
+        run(setup(hass, entry))
+        assert all(e.disabled_by is None for e in registry.entries)
+
+    def test_another_integrations_entity_is_left_alone(self, connects):
+        from custom_components.daikin_dbacs import async_setup_entry as setup
+
+        hass = HomeAssistant()
+        entry = entry_for({OPT_MEMBERS: ["room_temp"]})
+        registry, _er = self._registry(hass, entry)
+        registry.add("sensor.something_else", "some_other_unique_id")
+
+        run(setup(hass, entry))
+        assert registry.updates == []

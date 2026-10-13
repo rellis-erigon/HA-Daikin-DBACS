@@ -44,6 +44,11 @@ OBJECT_LIST_TIMEOUT = 60
 #: each group does.
 OBJECT_LIST_PAGE_LIMIT = 4000
 
+#: The BACnet priority we write at. 16 is the lowest there is, which is the
+#: right place for a dashboard: anything the building's own control system
+#: holds sits above us and keeps working.
+DEFAULT_WRITE_PRIORITY = 16
+
 
 class DbacsError(Exception):
     """Base class for anything that went wrong talking to the gateway."""
@@ -683,6 +688,63 @@ class DbacsGateway:
                 await asyncio.sleep(delay)
         raise DbacsNotReady(f"{self.host} never finished scanning DIII-NET")
 
+    # --- writes --------------------------------------------------------------
+
+    async def read_priority_array(self, point: PointRef) -> list[int]:
+        """Which BACnet priority slots another client is holding, 1-16.
+
+        Read before writing anything, because the gateway is normally shared
+        with a building management head-end. A slot we do not occupy is one
+        we must not take: writing into it would override the building's own
+        control and look perfectly normal from the BMS.
+        """
+        results = await self._read_properties(point.object_id, ["priority-array"])
+        for _name, value in results:
+            held: list[int] = []
+            try:
+                slots = list(value)
+            except TypeError:
+                return []
+            for index, slot in enumerate(slots, start=1):
+                if _priority_is_held(slot):
+                    held.append(index)
+            return held
+        return []
+
+    async def write_point(
+        self, point: PointRef, value: Any, priority: int = DEFAULT_WRITE_PRIORITY
+    ) -> None:
+        """Write one point's Present_Value at a given BACnet priority."""
+        if self._app is None:
+            raise DbacsUnreachable("not connected")
+        if not 1 <= priority <= 16:
+            raise ValueError(f"BACnet priority must be 1-16, not {priority}")
+
+        try:
+            async with self._semaphore:
+                response = await asyncio.wait_for(
+                    self._app.write_property(
+                        self._address,
+                        point.object_id,
+                        "present-value",
+                        value,
+                        priority=priority,
+                    ),
+                    timeout=REQUEST_TIMEOUT,
+                )
+        except (TimeoutError, asyncio.TimeoutError) as err:
+            raise DbacsUnreachable(
+                f"{self.host} did not acknowledge a write within "
+                f"{REQUEST_TIMEOUT}s"
+            ) from err
+        except OSError as err:
+            raise DbacsUnreachable(f"{self.host}: {err}") from err
+
+        # A write is acknowledged with nothing, so anything that comes back
+        # is a refusal.
+        if response is not None and _is_failure(response):
+            raise _map_error(response)
+
     # --- change of value -----------------------------------------------------
 
     async def subscribe(
@@ -795,6 +857,24 @@ def _map_error(response: Any) -> DbacsError:
 def _reason(err: BaseException) -> str:
     text = str(err).strip()
     return text or type(err).__name__
+
+
+def _priority_is_held(slot: Any) -> bool:
+    """Whether a Priority_Array slot has a value in it.
+
+    A free slot is BACnet Null. bacpypes3 represents each slot as a
+    PriorityValue whose `null` member is set when empty, so an absent `null`
+    means somebody is holding that priority.
+    """
+    if slot is None:
+        return False
+    if getattr(slot, "null", None) is not None:
+        return False
+    # Some stacks hand back a plain value, or None, rather than a choice.
+    for name in ("real", "integer", "boolean", "enumerated", "unsigned"):
+        if getattr(slot, name, None) is not None:
+            return True
+    return not hasattr(slot, "null")
 
 
 def _type_of_identifier(value: Any) -> str | None:

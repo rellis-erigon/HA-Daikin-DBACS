@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -12,14 +13,23 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
+    DEFAULT_CONTROL,
     DEFAULT_COV_LIFETIME,
+    DEFAULT_MIN_WRITE_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_WRITE_PRIORITY,
     DOMAIN,
+    OPT_CONTROL,
     OPT_COV_LIFETIME,
+    OPT_DAILY_WRITE_CAP,
+    OPT_ENFORCE_WRITE_CAP,
+    OPT_GATED,
     OPT_GROUPS,
     OPT_MEMBERS,
+    OPT_MIN_WRITE_INTERVAL,
     OPT_SCAN_INTERVAL,
     OPT_USE_COV,
+    OPT_WRITE_PRIORITY,
 )
 from .gateway import (
     DbacsError,
@@ -28,6 +38,7 @@ from .gateway import (
     GatewayInfo,
     PointValue,
 )
+from .writes import CHANGES_PER_DAY, WriteGuard, WriteRefused
 from .objects import (
     COV_MEMBERS,
     DEFAULT_MEMBERS,
@@ -131,6 +142,18 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         self._cov_points: dict[str, PointRef] = {}
         self._cov_failed: set[str] = set()
         self._descriptions: dict[str, str | None] = {}
+        self._priorities: dict[str, list[int]] = {}
+        self._pending: dict[str, tuple[PointRef, Any]] = {}
+        self._flushing: set[str] = set()
+        self.guard = WriteGuard(
+            min_interval=float(
+                entry.options.get(
+                    OPT_MIN_WRITE_INTERVAL, DEFAULT_MIN_WRITE_INTERVAL
+                )
+            ),
+            daily_cap=int(entry.options.get(OPT_DAILY_WRITE_CAP, CHANGES_PER_DAY)),
+            enforce_cap=bool(entry.options.get(OPT_ENFORCE_WRITE_CAP, True)),
+        )
 
         super().__init__(
             hass,
@@ -163,6 +186,22 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         if not chosen:
             return None
         return tuple(sorted(int(value) for value in chosen))
+
+    @property
+    def control_enabled(self) -> bool:
+        """Whether this entry may write to the gateway at all."""
+        return bool(self.entry.options.get(OPT_CONTROL, DEFAULT_CONTROL))
+
+    @property
+    def gated_enabled(self) -> bool:
+        """Whether the points that lock occupants out may be exposed."""
+        return bool(self.entry.options.get(OPT_GATED, False))
+
+    @property
+    def write_priority(self) -> int:
+        return int(
+            self.entry.options.get(OPT_WRITE_PRIORITY, DEFAULT_WRITE_PRIORITY)
+        )
 
     @property
     def use_cov(self) -> bool:
@@ -495,6 +534,172 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         return {
             "subscribed": len(self._cov_points),
             "refused": len(self._cov_failed),
+        }
+
+    # --- writes --------------------------------------------------------------
+
+    async def async_write(self, point: PointRef, value: Any) -> None:
+        """Write one point, if everything agrees that we should.
+
+        Four gates, in order of how badly each one would go wrong: control
+        has to be switched on for this entry at all; the write-rate guard has
+        to allow it; no other BACnet client may be holding the priority we
+        write at; and only then does anything leave the machine.
+        """
+        if not self.control_enabled:
+            raise WriteRefused(
+                "Control is switched off for this gateway. Turn it on in the "
+                "integration's options if you intend Home Assistant to "
+                "command the air conditioning."
+            )
+
+        now = self.hass.loop.time()
+
+        # The daily cap is a refusal; the spacing between writes is not.
+        # Somebody nudging a setpoint twice should not see an error, so a
+        # write that arrives too soon replaces the one already waiting and
+        # only the last value is sent.
+        budget = self.guard.budget(point.key)
+        if (
+            budget.last_at is not None
+            and now - budget.last_at < self.guard.min_interval
+        ):
+            if not self.guard.allows_within_cap(point.key, now):
+                self.guard.check(point.key, now)  # raises with the reason
+            self._coalesce(point, value, budget.last_at)
+            self._show_optimistically(point, value)
+            return
+
+        self.guard.check(point.key, now)
+        await self._async_check_priority(point)
+        await self._async_send(point, value)
+        self._show_optimistically(point, value)
+
+    async def _async_send(self, point: PointRef, value: Any) -> None:
+        """Actually write, and record that we did."""
+        try:
+            await self.gateway.write_point(
+                point, value, priority=self.write_priority
+            )
+        except DbacsError as err:
+            raise WriteRefused(f"{point.object_name}: {err}") from err
+
+        self.guard.record(point.key, self.hass.loop.time())
+        _LOGGER.debug(
+            "wrote %r to %s at priority %d",
+            value,
+            point.object_name,
+            self.write_priority,
+        )
+
+    def _show_optimistically(self, point: PointRef, value: Any) -> None:
+        """Show the value now, and let the gateway confirm it.
+
+        The status object is the truth and arrives on the next sweep or by
+        change-of-value. This only stops a control springing back under the
+        user's finger.
+        """
+        data = dict(self.data or {})
+        data[point.key] = PointValue(point, value=value)
+        self.async_set_updated_data(data)
+
+    def _coalesce(
+        self, point: PointRef, value: Any, last_at: float
+    ) -> None:
+        """Hold a write until this point is allowed another one."""
+        self._pending[point.key] = (point, value)
+        if point.key in self._flushing:
+            return  # a flush is already waiting; it will pick up the newest
+
+        delay = max(self.guard.min_interval - (self.hass.loop.time() - last_at), 0)
+        self._flushing.add(point.key)
+        _LOGGER.debug(
+            "holding a write to %s for %.0fs, so writes to one point stay "
+            "%.0fs apart",
+            point.object_name,
+            delay,
+            self.guard.min_interval,
+        )
+        self.entry.async_create_background_task(
+            self.hass,
+            self._async_flush(point.key, delay),
+            name=f"{DOMAIN} flush {point.key}",
+        )
+
+    async def _async_flush(self, key: str, delay: float) -> None:
+        """Send whatever the newest pending value for a point turned out to be."""
+        try:
+            await asyncio.sleep(delay)
+            pending = self._pending.pop(key, None)
+            if pending is None:
+                return
+            point, value = pending
+            try:
+                await self._async_check_priority(point)
+                await self._async_send(point, value)
+            except WriteRefused as err:
+                _LOGGER.warning("held write to %s was not sent: %s", key, err)
+        finally:
+            self._flushing.discard(key)
+
+    @property
+    def pending_writes(self) -> dict[str, Any]:
+        return {key: value for key, (_point, value) in self._pending.items()}
+
+    async def _async_check_priority(self, point: PointRef) -> None:
+        """Refuse to write into a priority slot somebody else is holding.
+
+        The gateway is normally shared with a building management head-end,
+        and a slot we do not occupy is one we must not take: overriding the
+        building's own control would look entirely normal from the BMS while
+        its schedule stopped working.
+        """
+        held = self._priorities.get(point.key)
+        if held is None:
+            try:
+                held = await self.gateway.read_priority_array(point)
+            except DbacsError as err:
+                _LOGGER.debug(
+                    "could not read the priority array of %s: %s",
+                    point.object_name,
+                    err,
+                )
+                held = []
+            self._priorities[point.key] = held
+
+        ours = self.write_priority
+        contended = [slot for slot in held if slot != ours]
+        if ours in held:
+            return  # our own earlier write
+        if contended:
+            raise WriteRefused(
+                f"{point.object_name} is being held at BACnet priority "
+                f"{', '.join(str(s) for s in contended)} by another client — "
+                "most likely the building management system. Home Assistant "
+                f"writes at priority {ours} and will not override it. Release "
+                "it at the source, or set a different priority in the "
+                "integration's options if you know what else is writing."
+            )
+
+    def forget_priorities(self) -> None:
+        """Re-survey priorities on the next write."""
+        self._priorities.clear()
+
+    @property
+    def write_summary(self) -> dict[str, Any]:
+        now = self.hass.loop.time()
+        return {
+            "control_enabled": self.control_enabled,
+            "priority": self.write_priority,
+            "min_interval": self.guard.min_interval,
+            "daily_cap": self.guard.daily_cap,
+            "cap_enforced": self.guard.enforce_cap,
+            "written_last_24h": self.guard.summary(now),
+            "pending": self.pending_writes,
+            "over_half_of_allowance": self.guard.over_half,
+            "priorities_held_elsewhere": {
+                key: held for key, held in self._priorities.items() if held
+            },
         }
 
     async def async_shutdown_gateway(self) -> None:

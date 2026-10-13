@@ -249,7 +249,7 @@ _MEMBERS: Final[tuple[Member, ...]] = (
         23, "air_direction_status", "AirDirectionStatus", ObjType.AI,
         "Air direction",
         note="0-3 horizontal, 4 vertical, 7 swing. Not a contiguous "
-             "enumeration, so it is carried as a number with a label.",
+             "enumeration, so it is carried as a number with a label.", default_on=True
     ),
     Member(
         24, "forced_thermo_off_command", "ForcedThermoOFFCommand", ObjType.BO,
@@ -258,7 +258,7 @@ _MEMBERS: Final[tuple[Member, ...]] = (
     ),
     Member(
         25, "forced_thermo_off_status", "ForcedThermoOFFStatus", ObjType.BI,
-        "Forced thermostat off", states=("Clearance", "Set"),
+        "Forced thermostat off", states=("Clearance", "Set"), default_on=True
     ),
     Member(
         26, "energy_saving_command", "EnergyEfficiencyCommand", ObjType.BO,
@@ -266,7 +266,7 @@ _MEMBERS: Final[tuple[Member, ...]] = (
     ),
     Member(
         27, "energy_saving_status", "EnergyEfficiencyStatus", ObjType.BI,
-        "Energy saving", states=("Clearance", "Set"),
+        "Energy saving", states=("Clearance", "Set"), default_on=True
     ),
     Member(
         28, "thermo_status", "ThermoStatus", ObjType.BI,
@@ -276,15 +276,15 @@ _MEMBERS: Final[tuple[Member, ...]] = (
         29, "compressor_status", "CompressorStatus", ObjType.BI,
         "Compressor", states=("Stopped", "Running"),
         note="The compressor of the outdoor unit serving this indoor unit. "
-             "It is the only outdoor information the gateway publishes.",
+             "It is the only outdoor information the gateway publishes.", default_on=True
     ),
     Member(
         30, "indoor_fan_status", "IndoorFanStatus", ObjType.BI,
-        "Indoor fan", states=("Stopped", "Running"),
+        "Indoor fan", states=("Stopped", "Running"), default_on=True
     ),
     Member(
         31, "heater_status", "HeaterStatus", ObjType.BI,
-        "Heater", states=("Stopped", "Running"),
+        "Heater", states=("Stopped", "Running"), default_on=True
     ),
     Member(
         32, "ventilation_mode_command", "VentilationModeCommand", ObjType.MO,
@@ -293,7 +293,7 @@ _MEMBERS: Final[tuple[Member, ...]] = (
     ),
     Member(
         33, "ventilation_mode_status", "VentilationModeStatus", ObjType.MI,
-        "Ventilation mode", states=("Bypass", "Heat exchange", "Auto"),
+        "Ventilation mode", states=("Bypass", "Heat exchange", "Auto"), default_on=True
     ),
     Member(
         34, "ventilation_amount_command", "VentilationAmountCommand", ObjType.MO,
@@ -305,7 +305,7 @@ _MEMBERS: Final[tuple[Member, ...]] = (
         35, "ventilation_amount_status", "VentilationAmountStatus", ObjType.MI,
         "Ventilation amount",
         states=("Low", "High", "Auto", "Low (fresh up)", "High (fresh up)",
-                "Auto (fresh up)"),
+                "Auto (fresh up)"), default_on=True
     ),
 )
 

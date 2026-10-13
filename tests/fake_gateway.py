@@ -21,6 +21,18 @@ from custom_components.daikin_dbacs.objects import (
 )
 
 
+class FakePriorityValue:
+    """A Priority_Array slot. Empty slots carry BACnet Null."""
+
+    def __init__(self, held: bool) -> None:
+        self.null = None if held else object()
+        self.real = 1.0 if held else None
+
+
+def _priority_array(held_slots: list[int]) -> list[FakePriorityValue]:
+    return [FakePriorityValue(slot in held_slots) for slot in range(1, 17)]
+
+
 def _split_identifier(object_id) -> tuple[str, int]:
     """Accept the forms bacpypes3 does: "type,instance", or an indexable."""
     if isinstance(object_id, str):
@@ -87,7 +99,14 @@ class FakeGatewayState:
     #: once its five recipients per object are taken.
     cov_budget: int = 1000
 
+    #: Priority slots another client is holding, per object instance. A real
+    #: gateway shares its objects with a building management head-end.
+    priorities: dict[int, list[int]] = field(default_factory=dict)
+    #: Refuse every write, as a gateway with a write-inhibited point would.
+    refuse_writes: bool = False
+
     rpm_calls: list[list[Any]] = field(default_factory=list)
+    writes: list[tuple[str, int, Any, int | None]] = field(default_factory=list)
     subscriptions: list[tuple[str, int]] = field(default_factory=list)
     #: Change-of-value notifications waiting to be delivered. A test pushes
     #: (property-identifier, value) pairs here the way the gateway would.
@@ -235,6 +254,18 @@ class FakeApp:
             answered_as = (type_name, instance)
             for prop in properties:
                 name = str(prop)
+                if name == "priority-array":
+                    results.append(
+                        (
+                            answered_as,
+                            name,
+                            None,
+                            _priority_array(
+                                self.state.priorities.get(instance, [])
+                            ),
+                        )
+                    )
+                    continue
                 if name != "present-value":
                     results.append(
                         (answered_as, name, None, self._device_property(name))
@@ -270,6 +301,21 @@ class FakeApp:
         return self.state.present_value(instance)
 
     # --- change of value -----------------------------------------------------
+
+    async def write_property(
+        self, _address, objid, prop, value, array_index=None, priority=None
+    ):
+        if self.state.offline:
+            raise TimeoutError("no answer")
+        type_name, instance = _split_identifier(objid)
+        if self.state.refuse_writes:
+            return FakeError("property", "write-access-denied")
+        self.state.writes.append((type_name, instance, value, priority))
+        if priority is not None:
+            held = self.state.priorities.setdefault(instance, [])
+            if priority not in held:
+                held.append(priority)
+        return None
 
     def change_of_value(self, _address, object_identifier, **_kwargs):
         return _FakeSubscription(self.state, object_identifier)

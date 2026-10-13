@@ -17,6 +17,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 
 from .const import (
     CONF_DEVICE_INSTANCE,
@@ -37,7 +38,17 @@ from .gateway import DbacsError, DbacsGateway
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR, Platform.SENSOR]
+#: Every platform is forwarded. The control ones create nothing while
+#: control is switched off, which is cheaper and less surprising than
+#: changing the platform list underneath a running entry.
+PLATFORMS: list[Platform] = [
+    Platform.BINARY_SENSOR,
+    Platform.BUTTON,
+    Platform.CLIMATE,
+    Platform.EVENT,
+    Platform.SENSOR,
+    Platform.SWITCH,
+]
 
 type DbacsConfigEntry = ConfigEntry[DbacsCoordinator]
 
@@ -89,9 +100,68 @@ async def async_setup_entry(hass: HomeAssistant, entry: DbacsConfigEntry) -> boo
     coordinator.hub_device_id = hub.id
 
     entry.runtime_data = coordinator
+    _reconcile_enabled_entities(hass, entry, coordinator)
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
+
+
+def _reconcile_enabled_entities(
+    hass: HomeAssistant, entry: DbacsConfigEntry, coordinator: DbacsCoordinator
+) -> None:
+    """Make the registry agree with the chosen point list.
+
+    `entity_registry_enabled_default` only applies the first time an entity
+    is created. Without this, adding a point in the options left its entities
+    disabled from a previous run and they were never read again — so the
+    bulk enable and disable this integration advertises did nothing after
+    the first setup.
+
+    The chosen list is the authority, and only entities this integration
+    disabled are re-enabled: a point somebody switched off by hand stays off.
+    """
+    registry = er.async_get(hass)
+    chosen = set(coordinator.enabled_member_keys)
+    enabled = disabled = 0
+
+    for entity in er.async_entries_for_config_entry(registry, entry.entry_id):
+        key = _member_key_of(entity.unique_id, entry.entry_id)
+        if key is None:
+            continue  # the climate entity and the fault events are not points
+        wanted = key in chosen
+
+        if wanted and entity.disabled_by is er.RegistryEntryDisabler.INTEGRATION:
+            registry.async_update_entity(entity.entity_id, disabled_by=None)
+            enabled += 1
+        elif not wanted and entity.disabled_by is None:
+            registry.async_update_entity(
+                entity.entity_id,
+                disabled_by=er.RegistryEntryDisabler.INTEGRATION,
+            )
+            disabled += 1
+
+    if enabled or disabled:
+        _LOGGER.debug(
+            "point selection changed: enabled %d entities, disabled %d",
+            enabled,
+            disabled,
+        )
+
+
+def _member_key_of(unique_id: str, entry_id: str) -> str | None:
+    """The member key out of one of our unique ids, or None if it has none.
+
+    Ours look like `<entry_id>_<ac number>_<member key>`, and the member key
+    is the only part that varies by point.
+    """
+    prefix = f"{entry_id}_"
+    if not unique_id.startswith(prefix):
+        return None
+    rest = unique_id[len(prefix) :]
+    _ac, _, key = rest.partition("_")
+    if not key or key in ("climate", "fault_event"):
+        return None
+    return key
 
 
 async def async_unload_entry(

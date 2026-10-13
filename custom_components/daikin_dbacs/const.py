@@ -22,6 +22,12 @@ OPT_MEMBERS: Final = "members"
 OPT_GROUPS: Final = "groups"
 OPT_USE_COV: Final = "use_cov"
 OPT_COV_LIFETIME: Final = "cov_lifetime"
+OPT_CONTROL: Final = "control"
+OPT_WRITE_PRIORITY: Final = "write_priority"
+OPT_MIN_WRITE_INTERVAL: Final = "min_write_interval"
+OPT_DAILY_WRITE_CAP: Final = "daily_write_cap"
+OPT_ENFORCE_WRITE_CAP: Final = "enforce_write_cap"
+OPT_GATED: Final = "gated"
 
 # --- defaults ----------------------------------------------------------------
 
@@ -64,6 +70,25 @@ REQUEST_TIMEOUT: Final = 10
 #: It is scanning its DIII-NET ports and will answer properly when it is done.
 CONFIG_IN_PROGRESS_RETRIES: Final = 10
 CONFIG_IN_PROGRESS_BACKOFF: Final = 6
+
+#: Control is off until it is asked for. Installing an update must not
+#: quietly make a building writable, and the write path has a review of its
+#: own — see PRD.md.
+DEFAULT_CONTROL: Final = False
+
+#: The lowest BACnet priority there is, which is where a dashboard belongs:
+#: whatever the building's own control system holds sits above us.
+DEFAULT_WRITE_PRIORITY: Final = 16
+
+#: Seconds between writes to the same point. See writes.py for why.
+DEFAULT_MIN_WRITE_INTERVAL: Final = 60
+
+#: Setpoint range offered. The unit clamps to its own limits silently, and
+#: those depend on the indoor and outdoor models and the current mode, so
+#: this is a sane envelope rather than a claim about any one unit.
+DEFAULT_MIN_TEMP: Final = 16.0
+DEFAULT_MAX_TEMP: Final = 32.0
+TEMP_STEP: Final = 0.5
 
 MANUFACTURER: Final = "Daikin"
 MODEL: Final = "Interface for use in BACnet"

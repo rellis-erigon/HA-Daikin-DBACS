@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import sys
 import types
-from enum import StrEnum
+from enum import IntFlag, StrEnum
 
 
 def homeassistant_available() -> bool:
@@ -42,12 +42,30 @@ def callback(func):
     return func
 
 
+class _Loop:
+    """The event loop's monotonic clock, which the write guard reads.
+
+    Settable, so a test can cover a day of write-rate behaviour without
+    waiting one.
+    """
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def time(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
 class HomeAssistant:
     """Just enough of hass to be passed around and stored."""
 
     def __init__(self) -> None:
         self.data: dict = {}
         self.config_entries = _ConfigEntries()
+        self.loop = _Loop()
 
 
 class _ConfigEntries:
@@ -79,6 +97,7 @@ class ConfigEntry:
         self.entry_id = entry_id
         self.runtime_data = None
         self._unload_callbacks: list = []
+        self.background_tasks: list = []
 
     def __class_getitem__(cls, _item):
         return cls
@@ -88,6 +107,13 @@ class ConfigEntry:
 
     def async_on_unload(self, func) -> None:
         self._unload_callbacks.append(func)
+
+    def async_create_background_task(self, hass, coro, name=None):
+        import asyncio
+
+        task = asyncio.ensure_future(coro)
+        self.background_tasks.append((name, task))
+        return task
 
 
 class ConfigFlow:
@@ -244,7 +270,11 @@ class _Entity:
 
 class Platform(StrEnum):
     BINARY_SENSOR = "binary_sensor"
+    BUTTON = "button"
+    CLIMATE = "climate"
+    EVENT = "event"
     SENSOR = "sensor"
+    SWITCH = "switch"
 
 
 class SensorDeviceClass(StrEnum):
@@ -261,6 +291,89 @@ class SensorStateClass(StrEnum):
 class BinarySensorDeviceClass(StrEnum):
     PROBLEM = "problem"
     RUNNING = "running"
+
+
+class HVACMode(StrEnum):
+    OFF = "off"
+    HEAT = "heat"
+    COOL = "cool"
+    HEAT_COOL = "heat_cool"
+    AUTO = "auto"
+    DRY = "dry"
+    FAN_ONLY = "fan_only"
+
+
+class HVACAction(StrEnum):
+    OFF = "off"
+    IDLE = "idle"
+    HEATING = "heating"
+    COOLING = "cooling"
+    DRYING = "drying"
+    FAN = "fan"
+
+
+class ClimateEntityFeature(IntFlag):
+    TARGET_TEMPERATURE = 1
+    FAN_MODE = 8
+    SWING_MODE = 32
+    TURN_OFF = 128
+    TURN_ON = 256
+
+
+class _ClimateEntity(_Entity):
+    _attr_temperature_unit = None
+    _attr_target_temperature_step = None
+    _attr_min_temp = None
+    _attr_max_temp = None
+    _attr_hvac_modes = None
+    _attr_fan_modes = None
+    _attr_swing_modes = None
+    _attr_supported_features = 0
+    _attr_translation_key = None
+
+    @property
+    def supported_features(self):
+        return self._attr_supported_features
+
+    @property
+    def hvac_modes(self):
+        return self._attr_hvac_modes
+
+    @property
+    def fan_modes(self):
+        return self._attr_fan_modes
+
+    @property
+    def swing_modes(self):
+        return self._attr_swing_modes
+
+
+class _EventEntity(_Entity):
+    _attr_event_types = []
+    _attr_translation_key = None
+
+    @property
+    def events(self) -> list:
+        """What has been fired. Lazy, because the subclass owns __init__."""
+        if getattr(self, "_fired", None) is None:
+            self._fired: list = []
+        return self._fired
+
+    @property
+    def event_types(self):
+        return self._attr_event_types
+
+    def _trigger_event(self, event_type, attributes=None) -> None:
+        self.events.append((event_type, attributes or {}))
+
+    async def async_added_to_hass(self) -> None:
+        return None
+
+    def _handle_coordinator_update(self) -> None:
+        return None
+
+    def async_write_ha_state(self) -> None:
+        return None
 
 
 class UnitOfTemperature(StrEnum):
@@ -295,6 +408,52 @@ _REGISTRIES: dict = {}
 
 def _device_registry(hass):
     return _REGISTRIES.setdefault(id(hass), _DeviceRegistry())
+
+
+class RegistryEntryDisabler(StrEnum):
+    INTEGRATION = "integration"
+    USER = "user"
+    CONFIG_ENTRY = "config_entry"
+
+
+class _RegistryEntry:
+    def __init__(self, entity_id, unique_id, disabled_by=None) -> None:
+        self.entity_id = entity_id
+        self.unique_id = unique_id
+        self.disabled_by = disabled_by
+
+
+class _EntityRegistry:
+    """Just the enable/disable surface the integration reconciles against."""
+
+    def __init__(self) -> None:
+        self.entries: list = []
+        self.updates: list = []
+
+    def add(self, entity_id, unique_id, disabled_by=None) -> _RegistryEntry:
+        entry = _RegistryEntry(entity_id, unique_id, disabled_by)
+        self.entries.append(entry)
+        return entry
+
+    def async_update_entity(self, entity_id, **changes):
+        for entry in self.entries:
+            if entry.entity_id == entity_id:
+                for key, value in changes.items():
+                    setattr(entry, key, value)
+                self.updates.append((entity_id, changes))
+                return entry
+        return None
+
+
+_ENTITY_REGISTRIES: dict = {}
+
+
+def _entity_registry(hass):
+    return _ENTITY_REGISTRIES.setdefault(id(hass), _EntityRegistry())
+
+
+def _entries_for_config_entry(registry, _entry_id):
+    return list(registry.entries)
 
 
 def _selector_module() -> types.ModuleType:
@@ -347,6 +506,7 @@ def install() -> None:
         Platform=Platform,
         UnitOfTemperature=UnitOfTemperature,
         UnitOfEnergy=UnitOfEnergy,
+        ATTR_TEMPERATURE="temperature",
     )
     _module("homeassistant.core", HomeAssistant=HomeAssistant, callback=callback)
     _module(
@@ -375,6 +535,16 @@ def install() -> None:
         BinarySensorEntity=_Entity,
         BinarySensorDeviceClass=BinarySensorDeviceClass,
     )
+    _module("homeassistant.components.button", ButtonEntity=_Entity)
+    _module("homeassistant.components.switch", SwitchEntity=_Entity)
+    _module("homeassistant.components.event", EventEntity=_EventEntity)
+    _module(
+        "homeassistant.components.climate",
+        ClimateEntity=_ClimateEntity,
+        ClimateEntityFeature=ClimateEntityFeature,
+        HVACAction=HVACAction,
+        HVACMode=HVACMode,
+    )
 
     helpers = _module("homeassistant.helpers")
     _module(
@@ -392,8 +562,15 @@ def install() -> None:
         "homeassistant.helpers.entity_platform",
         AddConfigEntryEntitiesCallback=object,
     )
+    _module(
+        "homeassistant.helpers.entity_registry",
+        async_get=_entity_registry,
+        async_entries_for_config_entry=_entries_for_config_entry,
+        RegistryEntryDisabler=RegistryEntryDisabler,
+    )
     _selector_module()
 
+    helpers.entity_registry = sys.modules["homeassistant.helpers.entity_registry"]
     helpers.selector = sys.modules["homeassistant.helpers.selector"]
     helpers.update_coordinator = sys.modules[
         "homeassistant.helpers.update_coordinator"

@@ -38,40 +38,82 @@ add-on, no MQTT broker, no BACnet broadcast.
 5. Choose which points you want in **Configure** — once, applied to every
    group.
 
-## Version 0.1 is read-only, deliberately
+## Control is off until you ask for it
 
-Nothing in this release writes to the gateway. That is a decision rather than
-an omission.
+By default this integration only reads. Turn on **Allow Home Assistant to
+control the air conditioning** in the integration's options and each group
+gains a thermostat, a filter-reset button and switches for its other
+commands.
 
-These gateways usually sit under a building management head-end, and a BACnet
-write holds a priority slot until it is released — a point held from Home
-Assistant looks normal to the BMS while the building's own control stops
-working. Daikin also caps setting changes at **7,000 per year per point**,
-which is nineteen a day, and an automation with a bad trigger will spend that
-in an afternoon.
+It is off by default because these gateways usually sit under a building
+management head-end, and because installing an update should never quietly
+make a building writable. Three things stand between a service call and the
+air conditioning:
 
-Writing is Phase 2, and it arrives with a priority survey and a write-rate
-guard rather than on its own. See [PRD.md](PRD.md).
+- **A priority survey.** A BACnet write holds a priority slot until it is
+  released, so before the first write to any point the integration reads that
+  point's `Priority_Array`. If another client is holding it — usually the
+  BMS — the write is refused and says so. A point held from Home Assistant
+  looks entirely normal to the BMS while the building's own schedule stops
+  working, which is the failure this exists to prevent. Home Assistant writes
+  at **priority 16**, the lowest there is, so anything the building's own
+  control holds sits above it.
+- **A write-rate guard.** Daikin caps setting changes at **7,000 a year per
+  point** — nineteen a day. An automation with a bad trigger would spend that
+  in an afternoon, and the result is a worn-out gateway rather than an error
+  message. Writes to one point are spaced at least 60 seconds apart, a
+  rolling 24-hour count warns past half the allowance, and the daily cap is
+  enforced by default.
+- **Coalescing**, so the spacing is not felt. A change that arrives too soon
+  replaces the one already waiting and only the last value is sent — nudging
+  a setpoint three times sends two writes, not three errors.
+
+The points that take control away from whoever is in the room — forced stop,
+forced thermostat off, and the three that disable the wall controller — are
+left out entirely unless you ask for them separately.
 
 ## What you get per indoor unit
+
+**Every status point the unit reports, enabled by default** — eighteen of
+them where the gateway publishes all eighteen:
 
 | Entity | From |
 |---|---|
 | Running | `StartStopStatus` |
 | Alarm | `Alarm` |
-| Malfunction code | `MalfunctionCode`, with the two-character Daikin code |
+| Malfunction code | `MalfunctionCode`, as the two-character Daikin code |
 | Mode | `AirConModeStatus` |
 | Fan speed | `AirFlowRateStatus` |
 | Room temperature | `RoomTemp` |
 | Setpoint | `TempAdjust` |
 | Filter | `FilterSign` |
 | Thermostat | `ThermoStatus` |
+| Compressor | `CompressorStatus` |
+| Indoor fan | `IndoorFanStatus` |
+| Heater | `HeaterStatus` |
+| Air direction | `AirDirectionStatus` |
+| Energy saving | `EnergyEfficiencyStatus` |
+| Forced thermostat off | `ForcedThermoOFFStatus` |
 | Communication | `CommunicationStatus` |
+| Ventilation mode and amount | `VentilationMode/AmountStatus` (heat reclaim ventilators) |
+| Fault | an `event` entity, so history shows *when* a unit faulted |
 
-Ten points, enabled by default, so a gateway comes up looking complete. A
-further twenty-three are available and start disabled — compressor, indoor
-fan, heater, air direction, energy saving, forced thermostat, accumulated
-power, and the ventilation points for heat reclaim ventilators.
+The two accumulators — accumulated power and accumulated gas — are available
+but off by default, because they are model-dependent and read zero on units
+that do not support them, which looks like a broken meter rather than an
+absent one.
+
+With control on, each group also gets a `climate` entity carrying mode,
+action, both temperatures, fan speed and swing, a filter-reset `button`, and
+`switch` entities for energy saving and forced thermostat off.
+
+### Why a fault event as well as an alarm
+
+An alarm binary sensor tells you a unit is faulted now. It does not tell you
+that it faulted at 04:10, cleared at 04:40 and did it again an hour later,
+which is the shape of an intermittent fault and the thing worth catching. The
+event carries the Daikin code with it, and a unit that was already faulted
+when Home Assistant started is not announced as a new fault.
 
 Every entity carries the BACnet object it reads, its instance number and its
 DIII-NET address as attributes, so a value can always be traced back to the
@@ -93,7 +135,14 @@ so, the point list is the load control, and it works on two axes:
 A point you have not chosen still exists in the entity registry, greyed out on
 its device page, so Home Assistant's own entity list can bulk-enable it with
 checkboxes. **What matters is that a disabled point is never read and never
-subscribed** — the sweep is built from enabled entities only.
+subscribed** — the sweep is built from the chosen list only.
+
+Changing that list takes effect immediately, including on points that were
+disabled by a previous run. `entity_registry_enabled_default` only applies
+when an entity is first created, so the integration reconciles the registry
+against the chosen list at startup — otherwise adding a point would appear to
+do nothing. A point you switched off by hand stays off; only ones the
+integration disabled are brought back.
 
 ## Only the points your gateway actually has
 

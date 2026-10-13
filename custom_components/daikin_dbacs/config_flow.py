@@ -22,21 +22,31 @@ from .const import (
     CONF_LOCAL_PORT,
     CONF_OUR_INSTANCE,
     CONF_PORT,
+    DEFAULT_CONTROL,
     DEFAULT_COV_LIFETIME,
     DEFAULT_LOCAL_PORT,
+    DEFAULT_MIN_WRITE_INTERVAL,
     DEFAULT_OUR_INSTANCE,
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_WRITE_PRIORITY,
     DOMAIN,
     MIN_SCAN_INTERVAL,
+    OPT_CONTROL,
     OPT_COV_LIFETIME,
+    OPT_DAILY_WRITE_CAP,
+    OPT_ENFORCE_WRITE_CAP,
+    OPT_GATED,
     OPT_GROUPS,
     OPT_MEMBERS,
+    OPT_MIN_WRITE_INTERVAL,
     OPT_SCAN_INTERVAL,
     OPT_USE_COV,
+    OPT_WRITE_PRIORITY,
 )
 from .gateway import DbacsGateway, DbacsNotReady, DbacsUnreachable
 from .objects import DEFAULT_MEMBERS, READABLE, address_label
+from .writes import CHANGES_PER_DAY
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -230,6 +240,57 @@ class DbacsOptionsFlow(OptionsFlow):
             )
         )
 
+        # Control, and the guards that come with it. Off by default: an
+        # update must not quietly make a building writable.
+        schema[
+            vol.Optional(OPT_CONTROL, default=options.get(OPT_CONTROL, DEFAULT_CONTROL))
+        ] = selector.BooleanSelector()
+        schema[
+            vol.Optional(OPT_GATED, default=options.get(OPT_GATED, False))
+        ] = selector.BooleanSelector()
+        schema[
+            vol.Optional(
+                OPT_WRITE_PRIORITY,
+                default=options.get(OPT_WRITE_PRIORITY, DEFAULT_WRITE_PRIORITY),
+            )
+        ] = selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=1, max=16, step=1, mode=selector.NumberSelectorMode.BOX
+            )
+        )
+        schema[
+            vol.Optional(
+                OPT_MIN_WRITE_INTERVAL,
+                default=options.get(
+                    OPT_MIN_WRITE_INTERVAL, DEFAULT_MIN_WRITE_INTERVAL
+                ),
+            )
+        ] = selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0,
+                max=3600,
+                step=5,
+                unit_of_measurement="s",
+                mode=selector.NumberSelectorMode.BOX,
+            )
+        )
+        schema[
+            vol.Optional(
+                OPT_DAILY_WRITE_CAP,
+                default=options.get(OPT_DAILY_WRITE_CAP, CHANGES_PER_DAY),
+            )
+        ] = selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=1, max=500, step=1, mode=selector.NumberSelectorMode.BOX
+            )
+        )
+        schema[
+            vol.Optional(
+                OPT_ENFORCE_WRITE_CAP,
+                default=options.get(OPT_ENFORCE_WRITE_CAP, True),
+            )
+        ] = selector.BooleanSelector()
+
         return self.async_show_form(
             step_id="init", data_schema=vol.Schema(schema)
         )
@@ -269,7 +330,13 @@ def _clean(user_input: dict[str, Any]) -> dict[str, Any]:
 
 def _clean_options(user_input: dict[str, Any]) -> dict[str, Any]:
     options = dict(user_input)
-    for key in (OPT_SCAN_INTERVAL, OPT_COV_LIFETIME):
+    for key in (
+        OPT_SCAN_INTERVAL,
+        OPT_COV_LIFETIME,
+        OPT_WRITE_PRIORITY,
+        OPT_MIN_WRITE_INTERVAL,
+        OPT_DAILY_WRITE_CAP,
+    ):
         if options.get(key) is not None:
             options[key] = int(options[key])
     if OPT_GROUPS in options:

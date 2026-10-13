@@ -104,19 +104,24 @@ class TestMemberTable:
         keys = [member.key for member in o.MEMBERS.values()]
         assert len(keys) == len(set(keys))
 
-    def test_defaults_are_a_complete_looking_unit(self):
-        assert set(o.DEFAULT_MEMBERS) == {
-            "on_off_status",
-            "alarm",
-            "malfunction_code",
-            "mode_status",
-            "fan_status",
-            "room_temp",
-            "setpoint",
-            "filter_sign",
-            "communication_status",
-            "thermo_status",
+    def test_every_status_point_is_on_by_default(self):
+        # The more points the better, so everything a group reports is
+        # enabled. Commands and resets are not readings, and the two
+        # accumulators are model-dependent and read zero on units that do
+        # not support them, which looks like a broken meter rather than an
+        # absent one.
+        expected = {
+            member.key
+            for member in o.READABLE
+            if member.kind is o.Kind.STATUS
+            and member.unit not in ("energy", "volume")
         }
+        assert set(o.DEFAULT_MEMBERS) == expected
+        assert len(o.DEFAULT_MEMBERS) == 18
+
+    def test_the_accumulators_stay_off(self):
+        assert not o.MEMBERS_BY_KEY["accumulated_power"].default_on
+        assert not o.MEMBERS_BY_KEY["accumulated_gas"].default_on
 
     def test_change_of_value_is_the_four_decided_on(self):
         assert set(o.COV_MEMBERS) == {

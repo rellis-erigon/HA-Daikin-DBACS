@@ -35,22 +35,59 @@
     "step": {
       "init": {
         "title": "Points and timing",
-        "description": "A fully expanded gateway publishes 256 indoor-unit groups of 33 readable points — nearly 9,000 in all. Disabled points are never read and never subscribed, so this list is what decides the load on a gateway you are sharing with a building management system.",
+        "description": "A fully expanded gateway could publish 256 indoor-unit groups of 33 readable points. Disabled points are never read and never subscribed, so this list is what decides the load on a gateway you are sharing with a building management system.",
         "data": {
           "members": "Points to carry, on every group",
           "groups": "Groups to carry",
           "scan_interval": "Sweep interval",
           "use_cov": "Use change-of-value",
-          "cov_lifetime": "Subscription lifetime"
+          "cov_lifetime": "Subscription lifetime",
+          "control": "Allow Home Assistant to control the air conditioning",
+          "gated": "Include the points that take control away from the room",
+          "write_priority": "BACnet write priority",
+          "min_write_interval": "Minimum time between writes to one point",
+          "daily_write_cap": "Daily write limit per point",
+          "enforce_write_cap": "Enforce the daily write limit"
         },
         "data_description": {
           "members": "Chosen per point and applied to every group, present and future.",
           "groups": "Leave empty for every live group. Narrow it to switch a floor or a wing off wholesale.",
           "scan_interval": "How often every enabled point is read. The sweep is the safety net; change-of-value carries what needs to be live.",
           "use_cov": "Subscribe to run status, alarm, malfunction code and room temperature so they arrive as they change. The gateway allows five subscribers per point; a refusal falls back to the sweep.",
-          "cov_lifetime": "Renewed before it lapses. Subscriptions are also rebuilt automatically if the gateway is power cycled, because it forgets them."
+          "cov_lifetime": "Renewed before it lapses. Subscriptions are also rebuilt automatically if the gateway is power cycled, because it forgets them.",
+          "control": "Off by default. With this on, each group gains a thermostat, a filter-reset button and switches for its other commands. Before any write, the integration reads the point's BACnet priority array and refuses if another client — usually the building management system — is holding it.",
+          "gated": "Forced stop, forced thermostat off, and the three that disable the wall controller. These affect whoever is in the room rather than just a number on a dashboard, so they are left out unless you ask for them.",
+          "write_priority": "16 is the lowest and the right answer for a dashboard: anything the building's own control system holds sits above it and keeps working. Only lower this if you know what else writes to the gateway.",
+          "min_write_interval": "Writes to the same point are spaced at least this far apart. A change that arrives sooner replaces the one already waiting, so nudging a setpoint twice sends one write rather than failing.",
+          "daily_write_cap": "Daikin caps setting changes at 7,000 a year per point, which is 19 a day. An automation with a bad trigger would otherwise spend a year's allowance in an afternoon, and the result is a worn-out gateway rather than an error message.",
+          "enforce_write_cap": "On by default. Turned off, the limit is only warned about in the log — the gateway's own hardware limit does not go away."
         }
       }
+    }
+  },
+  "entity": {
+    "climate": {
+      "indoor_unit": {
+        "name": null
+      }
+    },
+    "event": {
+      "fault": {
+        "name": "Fault",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "fault": "Faulted",
+              "cleared": "Cleared"
+            }
+          }
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "write_refused": {
+      "message": "{reason}"
     }
   }
 }

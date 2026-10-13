@@ -70,6 +70,7 @@ async def async_get_config_entry_diagnostics(
             "cov_lifetime": coordinator.cov_lifetime,
         },
         "change_of_value": coordinator.cov_summary,
+        "control": coordinator.write_summary,
         "points": {
             "requested": len(coordinator.points()),
             "answered": sum(1 for r in readings.values() if r.ok),
