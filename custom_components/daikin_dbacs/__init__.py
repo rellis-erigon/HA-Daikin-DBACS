@@ -191,8 +191,8 @@ def _register_services(hass: HomeAssistant) -> None:
 
             live: dict[int, Any] = {}
             for ac_number in coordinator.active_groups:
-                device = devices.async_get_device(
-                    identifiers={(DOMAIN, f"{entry.entry_id}_{ac_number}")}
+                device = devices.async_get_device_by_identifier(
+                    DOMAIN, f"{entry.entry_id}_{ac_number}"
                 )
                 if device is not None:
                     live[ac_number] = device
@@ -268,8 +268,8 @@ def _register_services(hass: HomeAssistant) -> None:
             if coordinator is None:
                 continue
             for ac_number in coordinator.active_groups:
-                device = devices.async_get_device(
-                    identifiers={(DOMAIN, f"{entry.entry_id}_{ac_number}")}
+                device = devices.async_get_device_by_identifier(
+                    DOMAIN, f"{entry.entry_id}_{ac_number}"
                 )
                 if device is None:
                     skipped.append(f"{address_label(ac_number)} has no device")

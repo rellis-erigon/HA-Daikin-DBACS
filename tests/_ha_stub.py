@@ -463,9 +463,11 @@ class _DeviceRegistry:
     def async_get(self, device_id):
         return self.devices.get(device_id)
 
-    def async_get_device(self, identifiers=None, **_kwargs):
+    def async_get_device_by_identifier(self, domain, identifier):
+        """Replaces async_get_device, which Home Assistant deprecated
+        because identifiers are no longer unique across config entries."""
         for device in self.devices.values():
-            if identifiers and set(identifiers) & set(device.identifiers or ()):
+            if (domain, identifier) in set(device.identifiers or ()):
                 return device
         return None
 
