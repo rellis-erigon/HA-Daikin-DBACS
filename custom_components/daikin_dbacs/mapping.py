@@ -35,10 +35,36 @@ _LOGGER = logging.getLogger(__name__)
 
 _DIGITS = re.compile(r"\d+")
 
-#: Where a mapping file is looked for when none is given. Outside the
-#: configuration directory on purpose: it is site data shared with the other
-#: bridges, and it must never be mistaken for part of this integration.
-DEFAULT_PATH = "/share/HA-Daikin-DBACS-site/gateway-11-units.json"
+#: Where mapping files are looked for. Outside the configuration directory
+#: on purpose: it is site data shared with the other bridges, and it must
+#: never be mistaken for part of this integration.
+SITE_DIR = "/share/HA-Daikin-DBACS-site"
+
+
+def path_for(device_instance: int | str) -> str:
+    """The mapping file for one gateway.
+
+    A DIII-NET address is only unique within a gateway — both gateways on a
+    site number their units from the same formula, so `1 · 1-00` exists on
+    each and means a different room on each. One file per gateway, named
+    after its BACnet device instance, is what keeps them apart.
+
+    Refusing a missing or non-numeric instance matters more than it looks:
+    falling back to some other gateway's file would name every unit
+    plausibly and wrongly.
+    """
+    try:
+        instance = int(device_instance)
+    except (TypeError, ValueError) as err:
+        raise MappingError(
+            "the gateway's BACnet device instance is not known, so its "
+            "mapping file cannot be identified"
+        ) from err
+    if instance < 0:
+        raise MappingError(
+            f"{instance} is not a BACnet device instance"
+        )
+    return f"{SITE_DIR}/gateway-{instance}-units.json"
 
 
 class MappingError(Exception):
@@ -111,15 +137,19 @@ class Plan:
         }
 
 
-def load(path: str | None = None) -> dict[int, UnitMapping]:
-    """Read a mapping file, keyed by DIII address or by AC number.
+def load(path: str) -> dict[int, UnitMapping]:
+    """Read one gateway's mapping file, keyed by DIII address or AC number.
 
     Accepts the address as the integration writes it (``"1 · 2-14"``), as
     plain text (``"1 2-14"`` or ``"1-2-14"``), or an ``ac_number`` field.
     Being forgiving here is worth it: the file is maintained by hand, and
     rejecting it over a middle dot would be absurd.
+
+    The path is required rather than defaulted. An address is only unique
+    within a gateway, so a default would be a way of silently reading some
+    other gateway's rooms. Use `path_for` to name the file.
     """
-    target = Path(path or DEFAULT_PATH)
+    target = Path(path)
     try:
         raw = json.loads(target.read_text(encoding="utf-8"))
     except FileNotFoundError as err:

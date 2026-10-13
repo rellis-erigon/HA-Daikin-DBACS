@@ -379,3 +379,20 @@ def expected_instance(ac_number: int, member_key: str) -> int:
     from custom_components.daikin_dbacs.objects import MEMBERS_BY_KEY  # noqa: PLC0415
 
     return instance_of(ac_number, MEMBERS_BY_KEY[member_key].number)
+
+
+def make_abort(reason: str):
+    """A raised protocol failure, exactly as `ReadProperty` delivers one.
+
+    This uses bacpypes3's own `AbortPDU` rather than a stand-in, because
+    the detail under test is its class hierarchy:
+    `ErrorRejectAbortNack`'s only base is **BaseException**, not Exception,
+    so it passes straight through `except Exception`. A hand-rolled
+    stand-in deriving from Exception — or from BaseException but unrelated
+    to bacpypes3 — would let a broken handler look fixed.
+    """
+    from bacpypes3.apdu import AbortPDU
+
+    abort = AbortPDU()
+    abort.apduAbortRejectReason = reason
+    return abort

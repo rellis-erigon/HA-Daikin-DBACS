@@ -16,7 +16,11 @@ from custom_components.daikin_dbacs import (
     diagnostics,
 )
 from custom_components.daikin_dbacs import gateway as gw
-from custom_components.daikin_dbacs.const import CONF_HOST, OPT_MEMBERS
+from custom_components.daikin_dbacs.const import (
+    CONF_DEVICE_INSTANCE,
+    CONF_HOST,
+    OPT_MEMBERS,
+)
 
 import fake_gateway as fake
 
@@ -37,9 +41,14 @@ def connects(monkeypatch):
     return state
 
 
-def entry_for(options=None):
+def entry_for(options=None, device_instance=11):
+    # The config flow always records the device instance, and the mapping
+    # file is named after it, so a realistic entry carries one.
+    data = {CONF_HOST: "192.0.2.10"}
+    if device_instance is not None:
+        data[CONF_DEVICE_INSTANCE] = device_instance
     return ConfigEntry(
-        data={CONF_HOST: "192.0.2.10"},
+        data=data,
         options=options or {OPT_MEMBERS: ["room_temp", "alarm", "malfunction_code"]},
     )
 
@@ -384,3 +393,18 @@ class TestNothingBlocksTheEventLoop:
         hass.async_add_executor_job = record
         run(setup(hass, entry_for()))
         assert "load" in calls
+
+    def test_an_entry_with_no_device_instance_sets_up_without_a_mapping(
+        self, connects
+    ):
+        """Refusing to guess which file is better than reading the wrong one.
+
+        Without an instance there is no way to tell which gateway's mapping
+        belongs to this entry, so it gets none — and still works, just with
+        no names, areas or outdoor units.
+        """
+        hass = HomeAssistant()
+        entry = entry_for(device_instance=None)
+        assert run(async_setup_entry(hass, entry)) is True
+        assert entry.runtime_data.site == {}
+        assert entry.runtime_data.systems == {}

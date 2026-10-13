@@ -374,11 +374,18 @@ class DbacsGateway:
         array_index: int | None = None,
         timeout: float = REQUEST_TIMEOUT,
     ) -> Any:
-        """One ReadProperty, with a returned failure turned into a raise.
+        """One ReadProperty, with every failure shape turned into ours.
 
-        bacpypes3 returns an error, reject or abort object in place of the
-        value rather than raising it, so without this a failure reads as
-        data.
+        bacpypes3 is inconsistent here, and both halves have to be handled:
+
+        - it *returns* an error, reject or abort object in place of the
+          value, so without this a failure reads as data;
+        - and `ReadProperty` also *raises* one, unlike
+          `ReadPropertyMultiple`. A raise escaping this method skips the
+          caller's fallbacks — the second gateway on this site answers a
+          whole-array Object_List read with `AbortPDU: buffer-overflow`,
+          and that has to fail into the paged read rather than out of the
+          integration.
         """
         if self._app is None:
             raise DbacsUnreachable("not connected")
@@ -396,6 +403,10 @@ class DbacsGateway:
             ) from err
         except OSError as err:
             raise DbacsUnreachable(f"{self.host}: {err}") from err
+        except protocol_failure() as err:
+            # `ReadProperty` raises these; `ReadPropertyMultiple` returns
+            # them. Mapping it here is what lets a caller fall back.
+            raise _map_error(err) from err
 
         if _is_failure(response):
             raise _map_error(response)
@@ -852,6 +863,29 @@ def _is_error(value: Any) -> bool:
     this module importable — and testable — without the BACnet stack present.
     """
     return hasattr(value, "errorClass") and hasattr(value, "errorCode")
+
+
+_PROTOCOL_FAILURE: type[BaseException] | None = None
+
+
+def protocol_failure() -> type[BaseException]:
+    """bacpypes3's error/reject/abort base class, imported lazily.
+
+    Worth a function of its own because of one detail that is easy to lose
+    an afternoon to: `ErrorRejectAbortNack`'s only base class is
+    **BaseException**, not Exception. It therefore passes straight through
+    `except Exception`, and a handler written the obvious way never runs.
+
+    Imported here rather than at module scope to keep bacpypes3 out of the
+    import path until a gateway is actually spoken to, as the rest of this
+    module does.
+    """
+    global _PROTOCOL_FAILURE
+    if _PROTOCOL_FAILURE is None:
+        from bacpypes3.apdu import ErrorRejectAbortNack  # noqa: PLC0415
+
+        _PROTOCOL_FAILURE = ErrorRejectAbortNack
+    return _PROTOCOL_FAILURE
 
 
 def _is_failure(value: Any) -> bool:

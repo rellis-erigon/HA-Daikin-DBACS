@@ -38,7 +38,7 @@ from .const import (
 from .coordinator import DbacsCoordinator
 from .cards import generated
 from .systems import systems_from_mapping
-from .mapping import DEFAULT_PATH, MappingError, load as load_mapping, plan
+from .mapping import MappingError, load as load_mapping, path_for, plan
 from .objects import SELECTABLE, address_label
 from .gateway import DbacsError, DbacsGateway
 
@@ -113,7 +113,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: DbacsConfigEntry) -> boo
     # The gateway cannot: its only outdoor information is a compressor flag
     # on each indoor unit.
     try:
-        site = await hass.async_add_executor_job(load_mapping)
+        site_path = path_for(entry.data.get(CONF_DEVICE_INSTANCE))
+        site = await hass.async_add_executor_job(load_mapping, site_path)
     except MappingError as err:
         _LOGGER.debug("no site mapping, so no outdoor units: %s", err)
     else:
@@ -171,11 +172,28 @@ def _register_services(hass: HomeAssistant) -> None:
         shown is what would happen rather than a description of it.
         """
         dry_run = call.data.get("dry_run", True)
-        path = call.data.get("path") or DEFAULT_PATH
-        try:
-            mapping = await hass.async_add_executor_job(load_mapping, path)
-        except MappingError as err:
-            raise HomeAssistantError(str(err)) from err
+        override = call.data.get("path")
+        wanted_host = call.data.get("host")
+
+        targets = [
+            entry
+            for entry in hass.config_entries.async_entries(DOMAIN)
+            if getattr(entry, "runtime_data", None) is not None
+            and (not wanted_host or entry.data.get(CONF_HOST) == wanted_host)
+        ]
+        if wanted_host and not targets:
+            raise HomeAssistantError(
+                f"no configured gateway at {wanted_host}"
+            )
+        # An explicit file names one gateway's units. Spreading it across
+        # several would rename each gateway after the first one's rooms —
+        # plausibly, and without any error to notice.
+        if override and len(targets) > 1:
+            raise HomeAssistantError(
+                "path applies to one gateway, but "
+                f"{len(targets)} are configured. Name one with host, or "
+                "leave path unset so each gateway uses its own file."
+            )
 
         devices = dr.async_get(hass)
         areas = ar.async_get(hass)
@@ -184,10 +202,13 @@ def _register_services(hass: HomeAssistant) -> None:
         }
 
         report: dict[str, Any] = {"gateways": []}
-        for entry in hass.config_entries.async_entries(DOMAIN):
-            coordinator = getattr(entry, "runtime_data", None)
-            if coordinator is None:
-                continue
+        for entry in targets:
+            coordinator = entry.runtime_data
+            path = override or path_for(entry.data.get(CONF_DEVICE_INSTANCE))
+            try:
+                mapping = await hass.async_add_executor_job(load_mapping, path)
+            except MappingError as err:
+                raise HomeAssistantError(f"{entry.title}: {err}") from err
 
             live: dict[int, Any] = {}
             for ac_number in coordinator.active_groups:

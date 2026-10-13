@@ -334,3 +334,63 @@ class TestObjectCount:
 
 async def _no_sleep(_seconds):
     return None
+
+
+class TestRaisedProtocolFailures:
+    """bacpypes3 does not always *return* the failure.
+
+    `read_property_multiple` returns an error object in place of the value,
+    which is trap enough. But plain `ReadProperty` raises its
+    ErrorRejectAbortNack instead, and a raise escaping `_read_one` skips
+    every fallback the caller has.
+
+    The second gateway on this site found it: it answers an Object_List
+    read with `AbortPDU: buffer-overflow`, so the whole-array read has to
+    fail into the paged read rather than out of the integration.
+    """
+
+    def test_an_abort_is_turned_into_our_own_error(self, monkeypatch):
+        gateway = gw.DbacsGateway("192.0.2.10", device_instance=12)
+        state = fake.FakeGatewayState(populated={0})
+        fake.attach(gateway, state)
+
+        async def abort(*_args, **_kwargs):
+            raise fake.make_abort("buffer-overflow")
+
+        monkeypatch.setattr(gateway._app, "read_property", abort)
+
+        with pytest.raises(gw.DbacsError) as err:
+            asyncio.run(gateway._read_one("device,12", "object-list"))
+        assert "buffer-overflow" in str(err.value)
+
+    def test_a_whole_object_list_that_aborts_falls_back_to_paging(
+        self, monkeypatch
+    ):
+        """The point of mapping the abort: the slow path must still run."""
+        gateway = gw.DbacsGateway("192.0.2.10", device_instance=12)
+        state = fake.FakeGatewayState(populated={0, 1})
+        fake.attach(gateway, state)
+
+        paged: list[bool] = []
+        real_page = gateway._page_object_list
+
+        async def record(device_id):
+            paged.append(True)
+            return await real_page(device_id)
+
+        monkeypatch.setattr(gateway, "_page_object_list", record)
+
+        original = gateway._app.read_property
+
+        async def abort_whole_array(address, obj, prop, array_index=None,
+                                    **kwargs):
+            if prop == "object-list" and array_index is None:
+                raise fake.make_abort("buffer-overflow")
+            return await original(address, obj, prop,
+                                  array_index=array_index, **kwargs)
+
+        monkeypatch.setattr(gateway._app, "read_property", abort_whole_array)
+
+        objects = asyncio.run(gateway._read_object_list())
+        assert paged == [True]
+        assert objects

@@ -23,8 +23,9 @@ apply_mapping:
     Name and place the discovered indoor units from a mapping file. The
     gateway knows a unit only by its DIII-NET address, so room names, areas
     and equipment tags come from a file you maintain — a commissioning
-    report or a schedule — and never from this integration. Reports what it
-    would do by default.
+    report or a schedule — and never from this integration. Each gateway
+    reads its own file, named after its BACnet device instance. Reports
+    what it would do by default.
   fields:
     dry_run:
       name: Dry run
@@ -35,13 +36,25 @@ apply_mapping:
       default: true
       selector:
         boolean:
+    host:
+      name: Gateway
+      description: >-
+        Act on one gateway only, by its address. Leave empty to do every
+        configured gateway, each from its own mapping file.
+      required: false
+      example: 192.0.2.10
+      selector:
+        text:
     path:
       name: Mapping file
       description: >-
-        Where the file is. Defaults to
-        /share/HA-Daikin-DBACS-site/gateway-11-units.json.
+        Override which file to read. Leave empty and each gateway uses
+        /share/HA-Daikin-DBACS-site/gateway-<device instance>-units.json,
+        which is what keeps two gateways apart — a DIII address is only
+        unique within one gateway. If you set this while more than one
+        gateway is configured, name the gateway with Host as well.
       required: false
-      example: /share/HA-Daikin-DBACS-site/gateway-11-units.json
+      example: /share/HA-Daikin-DBACS-site/gateway-12-units.json
       selector:
         text:
     set_names:
