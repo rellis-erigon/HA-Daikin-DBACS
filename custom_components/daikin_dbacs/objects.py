@@ -214,7 +214,16 @@ _MEMBERS: Final[tuple[Member, ...]] = (
         17, "central_control_rejection", "CL_Rejection", ObjType.BV,
         "Reject sub-group control", Kind.COMMAND, gated=True,
     ),
-    # Member 18 exists but is Japanese market only.
+    Member(
+        18, "accumulated_gas", "AccumulatedGas", ObjType.ACCUMULATOR,
+        "Accumulated gas", unit="volume",
+        note="The specification marks member 18 as Japanese market only and "
+             "names no object, but real gateways publish an Accumulator "
+             "here. Daikin documents the Accumulator type as carrying "
+             "accumulated power and accumulated gas, and member 19 is the "
+             "power one, so this is taken to be gas. Off by default, and "
+             "worth checking against the equipment before trusting.",
+    ),
     Member(
         19, "accumulated_power", "AccumulatedPower", ObjType.ACCUMULATOR,
         "Accumulated power", unit="energy",
@@ -306,7 +315,6 @@ MEMBERS_BY_KEY: Final = MappingProxyType({m.key: m for m in _MEMBERS})
 #: Vacant member numbers, kept explicit so a gap is never read as an omission.
 VACANT: Final = MappingProxyType({
     15: "vacant",
-    18: "Japanese market only",
 })
 
 #: Members read-only enough to expose before the write path exists.
@@ -409,9 +417,14 @@ class PointRef:
         return instance_of(self.ac_number, self.member.number)
 
     @property
-    def object_id(self) -> tuple[str, int]:
-        """The bacpypes3 object identifier tuple."""
-        return (str(self.member.object_type), self.instance)
+    def object_id(self) -> str:
+        """The object identifier, as bacpypes3 wants it written.
+
+        The ``"type,instance"`` string form rather than a tuple: bacpypes3
+        accepts an ObjectIdentifier or this string and rejects a plain tuple,
+        and the string keeps this module free of the BACnet stack.
+        """
+        return f"{self.member.object_type},{self.instance}"
 
     @property
     def object_name(self) -> str:

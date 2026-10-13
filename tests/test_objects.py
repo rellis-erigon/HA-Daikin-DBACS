@@ -66,8 +66,16 @@ class TestInstanceNumbers:
 class TestMemberTable:
     def test_vacant_members_are_absent_and_documented(self):
         assert 15 not in o.MEMBERS
-        assert 18 not in o.MEMBERS
-        assert set(o.VACANT) == {15, 18}
+        assert set(o.VACANT) == {15}
+
+    def test_member_18_is_modelled_despite_being_called_vacant(self):
+        # The specification names no object for member 18 and marks it
+        # Japanese market only, but real gateways publish an Accumulator
+        # there. Leaving it out made 96 identical "unrecognised object"
+        # entries on a live system.
+        assert o.MEMBERS[18].object_type is o.ObjType.ACCUMULATOR
+        assert not o.MEMBERS[18].default_on
+        assert "Japanese market" in o.MEMBERS[18].note
 
     def test_covers_every_documented_member(self):
         expected = set(range(1, 36)) - set(o.VACANT)
@@ -204,7 +212,9 @@ class TestPointRefs:
     def test_names_the_object_the_way_the_gateway_does(self):
         point = o.PointRef(5, o.MEMBERS[9])
         assert point.object_name == "RoomTemp_5"
-        assert point.object_id == ("analog-input", 1289)
+        # bacpypes3 rejects a plain tuple, so the identifier is written
+        # the way it parses.
+        assert point.object_id == "analog-input,1289"
         assert point.instance == 5 * 256 + 9
 
     def test_points_for_limits_to_the_members_asked_for(self):

@@ -78,9 +78,11 @@ object it came from.
 
 ## Choosing points, in bulk
 
-A fully expanded gateway publishes **256 groups of 33 readable points** —
-nearly nine thousand. Reading all of them is not a thing anyone should do, so
-the point list is the load control, and it works on two axes:
+A fully expanded gateway could publish **256 groups of 33 readable points** —
+nearly nine thousand. Real ones publish far fewer, and read faster than that
+ceiling suggests: on a system with most of one DIII-NET port populated,
+*every* member of *every* group reads in about four and a half seconds. Even
+so, the point list is the load control, and it works on two axes:
 
 - **By point, across every group.** "Give me setpoint on everything." "I
   never want heater status." Chosen once in **Configure** and applied to every
@@ -91,6 +93,25 @@ A point you have not chosen still exists in the entity registry, greyed out on
 its device page, so Home Assistant's own entity list can bulk-enable it with
 checkboxes. **What matters is that a disabled point is never read and never
 subscribed** — the sweep is built from enabled entities only.
+
+## Only the points your gateway actually has
+
+Groups differ in what they publish, and so do firmware versions. On a real
+system most groups carry neither Forced stop nor Reject sub-group control
+while a couple carry both, and the ventilation members for heat reclaim
+ventilators do not exist at all on firmware older than specification edition
+G.
+
+So the entity list is built from the gateway's own `Object_List` rather than
+from a table of what the model *could* have. **An entity that could only ever
+be unavailable is not created.** Diagnostics reports which groups publish
+which set of members, because "why has this unit got fewer entities than that
+one" is usually this.
+
+If the gateway will not give up its object list, the integration falls back to
+paging it, and then to probing every slot — which still finds every group, it
+just cannot tell which members each one carries, so the full set is assumed
+rather than invented.
 
 ## Absent, dead, and unavailable
 
@@ -142,8 +163,12 @@ directory by hand.
 - **Our device instance is configurable**, and must be unique on the network.
   The default is high in the range on purpose, because the low numbers are
   where commissioned equipment lives.
-- If a unicast Who-Is goes unanswered you can enter the gateway's **device
-  instance number** by hand. It is set with Daikin's Trial Operation tool.
+- **The device instance is found for you, two ways.** A unicast Who-Is
+  first; and when that goes unanswered — which is normal, because `I-Am` is
+  broadcast and cannot cross a routed boundary — a plain ReadProperty on
+  `device,4194303`, BACnet's unconfigured instance, which gateways answer
+  with their real one. Entering it by hand is the third resort, not the
+  second. It is set with Daikin's Trial Operation tool.
 
 ## Things worth knowing about the object model
 
@@ -163,6 +188,14 @@ Written down here because each one is a trap:
   is only spent on units actually in alarm.
 - Air direction is not a contiguous enumeration: 0–3 horizontal, 4 vertical,
   7 swing.
+- **Member 18 is published as an `Accumulator`** even though the
+  specification names no object for it and marks it Japanese-market-only. It
+  is modelled, off by default, and labelled with the inference stated — the
+  Accumulator type carries accumulated power and accumulated gas, and member
+  19 is the power one.
+- Binary present-values arrive as BACnet `BinaryPV` enumerations rather than
+  as `0`/`1` or `"active"`, and temperatures arrive as float32 artefacts
+  (`21.600000381469727`). Both are normalised.
 - Instance numbers are computable, not a table:
   `instance = ac_number × 256 + member`, with the AC number running in DIII
   address order across four ports of four lines of sixteen groups. The

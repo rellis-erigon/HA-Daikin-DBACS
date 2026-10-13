@@ -14,7 +14,7 @@ import asyncio
 import logging
 from collections.abc import Callable, Iterable, Sequence
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from .const import (
@@ -27,9 +27,22 @@ from .const import (
     REQUEST_TIMEOUT,
     RPM_CHUNK,
 )
-from .objects import MEMBERS, PROBE_MEMBER, PointRef
+from .objects import MEMBERS, MEMBERS_PER_UNIT, PROBE_MEMBER, PointRef
 
 _LOGGER = logging.getLogger(__name__)
+
+#: BACnet's unconfigured device instance. Reading the device object at this
+#: instance is how a device can be asked its own identity without a
+#: broadcast.
+WILDCARD_INSTANCE = 4194303
+
+#: A whole Object_List is one segmented read, and worth waiting longer for
+#: than an ordinary request.
+OBJECT_LIST_TIMEOUT = 60
+
+#: Above this, paging the list one element at a time costs more than probing
+#: each group does.
+OBJECT_LIST_PAGE_LIMIT = 4000
 
 
 class DbacsError(Exception):
@@ -93,6 +106,20 @@ class GatewayInfo:
         gateway does not mention it, so this is how the coordinator notices.
         """
         return (self.database_revision, self.system_status)
+
+
+@dataclass(frozen=True, slots=True)
+class ObjectMap:
+    """Which members each indoor-unit group actually publishes."""
+
+    members: dict[int, frozenset[int]]
+    unrecognised: dict[str, int] = field(default_factory=dict)
+    """Objects we do not model, counted by kind rather than by instance."""
+    total: int = 0
+
+    @property
+    def ac_numbers(self) -> tuple[int, ...]:
+        return tuple(sorted(self.members))
 
 
 @dataclass(slots=True)
@@ -214,7 +241,7 @@ class DbacsGateway:
             instance = await self._who_is()
         self.device_instance = instance
 
-        device_id = ("device", instance)
+        device_id = f"device,{instance}"
         wanted = (
             "object-name",
             "vendor-name",
@@ -248,34 +275,84 @@ class DbacsGateway:
         )
 
     async def _who_is(self) -> int:
-        """Unicast Who-Is, to learn the device instance we were not given."""
+        """Learn the device instance we were not given.
+
+        Two ways, in order, because the first one often cannot work. A
+        BACnet device answers Who-Is with I-Am, and I-Am is normally
+        *broadcast* — so across a routed boundary, or from a container on a
+        different subnet, a perfectly reachable gateway will never appear to
+        answer. The fallback asks the device object directly.
+        """
+        found: list = []
         try:
             async with self._semaphore:
                 found = await asyncio.wait_for(
                     self._app.who_is(address=self._address),
                     timeout=REQUEST_TIMEOUT,
-                )
-        except (TimeoutError, asyncio.TimeoutError) as err:
-            raise DbacsUnreachable(
-                f"no I-Am from {self.host}:{self.port}. If the gateway is "
-                "there, its device instance number has to be given by hand."
-            ) from err
+                ) or []
+        except (TimeoutError, asyncio.TimeoutError):
+            found = []
         except OSError as err:
             raise DbacsUnreachable(f"{self.host}:{self.port}: {err}") from err
 
-        for i_am in found or []:
+        for i_am in found:
             identifier = getattr(i_am, "iAmDeviceIdentifier", None)
             if identifier is not None:
+                _LOGGER.debug(
+                    "%s identified itself by I-Am as device %s",
+                    self.host,
+                    identifier[1],
+                )
                 return int(identifier[1])
+
+        instance = await self._read_wildcard_instance()
+        if instance is not None:
+            return instance
+
         raise DbacsUnreachable(
-            f"{self.host}:{self.port} answered Who-Is without a device "
-            "identifier"
+            f"{self.host}:{self.port} did not answer Who-Is, and would not "
+            "say what its device instance is. If the gateway is reachable, "
+            "enter the instance number by hand — it is set with Daikin's "
+            "Trial Operation tool."
         )
+
+    async def _read_wildcard_instance(self) -> int | None:
+        """Ask the device object its own identity, via the wildcard instance.
+
+        4194303 is BACnet's unconfigured device instance, and a device that
+        accepts it answers with its real Object_Identifier. It is one plain
+        unicast ReadProperty, so it works wherever a broadcast I-Am cannot.
+        """
+        try:
+            value = await self._read_one(
+                f"device,{WILDCARD_INSTANCE}", "object-identifier"
+            )
+        except DbacsUnreachable:
+            return None
+        except DbacsError as err:
+            # A refusal is an answer too: this gateway will not be asked
+            # that way, and the instance has to come from elsewhere.
+            _LOGGER.debug(
+                "%s would not answer for the wildcard device instance: %s",
+                self.host,
+                err,
+            )
+            return None
+
+        instance = _instance_of_identifier(value)
+        if instance is None or instance == WILDCARD_INSTANCE:
+            return None
+        _LOGGER.debug(
+            "%s identified itself as device %s via the wildcard instance",
+            self.host,
+            instance,
+        )
+        return instance
 
     # --- reads ---------------------------------------------------------------
 
     async def _read_properties(
-        self, object_id: tuple[str, int], properties: Sequence[str]
+        self, object_id: str, properties: Sequence[str]
     ) -> list[tuple[str, Any]]:
         """ReadPropertyMultiple for one object, errors dropped per property."""
         results = await self._rpm([(object_id, list(properties))])
@@ -285,22 +362,65 @@ class DbacsGateway:
             if not _is_error(value)
         ]
 
-    async def _rpm(self, parameter_list: list[Any]) -> list[tuple[Any, ...]]:
+    async def _read_one(
+        self,
+        object_id: str,
+        prop: str,
+        array_index: int | None = None,
+        timeout: float = REQUEST_TIMEOUT,
+    ) -> Any:
+        """One ReadProperty, with a returned failure turned into a raise.
+
+        bacpypes3 returns an error, reject or abort object in place of the
+        value rather than raising it, so without this a failure reads as
+        data.
+        """
+        if self._app is None:
+            raise DbacsUnreachable("not connected")
+        try:
+            async with self._semaphore:
+                response = await asyncio.wait_for(
+                    self._app.read_property(
+                        self._address, object_id, prop, array_index=array_index
+                    ),
+                    timeout=timeout,
+                )
+        except (TimeoutError, asyncio.TimeoutError) as err:
+            raise DbacsUnreachable(
+                f"{self.host} did not answer within {timeout}s"
+            ) from err
+        except OSError as err:
+            raise DbacsUnreachable(f"{self.host}: {err}") from err
+
+        if _is_failure(response):
+            raise _map_error(response)
+        return response
+
+    async def _rpm(
+        self, parameter_list: list[tuple[str, list[str]]]
+    ) -> list[tuple[Any, ...]]:
         """One ReadPropertyMultiple, with our error vocabulary applied.
 
-        bacpypes3 *returns* a failure rather than raising it, and a
-        per-property failure arrives inside the result list, so both have to
-        be unpicked here rather than anywhere else.
+        Three bacpypes3 details are absorbed here so that no caller has to
+        know them:
+
+        - the parameter list is **flat** — object, properties, object,
+          properties — despite the type annotation saying pairs;
+        - a whole-request failure is *returned* rather than raised;
+        - a single-property failure arrives inside the result list.
         """
         if self._app is None:
             raise DbacsUnreachable("not connected")
 
+        flat: list[Any] = []
+        for object_id, properties in parameter_list:
+            flat.append(object_id)
+            flat.append(list(properties))
+
         try:
             async with self._semaphore:
                 response = await asyncio.wait_for(
-                    self._app.read_property_multiple(
-                        self._address, parameter_list
-                    ),
+                    self._app.read_property_multiple(self._address, flat),
                     timeout=REQUEST_TIMEOUT,
                 )
         except (TimeoutError, asyncio.TimeoutError) as err:
@@ -369,7 +489,7 @@ class DbacsGateway:
         }
         out: dict[str, PointValue] = {}
         for object_id, _prop, _index, value in results:
-            point = by_instance.get(int(object_id[1]))
+            point = by_instance.get(_instance_of_identifier(object_id))
             if point is None:
                 continue
             if _is_error(value):
@@ -399,6 +519,113 @@ class DbacsGateway:
                 return text
         return None
 
+    async def read_object_map(self) -> ObjectMap | None:
+        """What the gateway publishes, read from its own Object_List.
+
+        This is the authoritative answer and the cheap one: the list names
+        every object that exists, so one read gives both which groups are
+        populated *and* which members each of them publishes — and those
+        differ in practice. Two groups on a system can carry Forced stop
+        while the other ninety-four do not, and a gateway on older firmware
+        carries none of the ventilation members at all.
+
+        Returns None if the list cannot be read, so the caller can fall back
+        to probing. An object we do not model, or whose type does not match
+        the member we would decode it as, is recorded rather than guessed at.
+        """
+        if self._app is None:
+            raise DbacsUnreachable("not connected")
+
+        objects = await self._read_object_list()
+        if not objects:
+            return None
+
+        members: dict[int, set[int]] = {}
+        unrecognised: dict[str, int] = {}
+        for identifier in objects:
+            type_name = _type_of_identifier(identifier)
+            instance = _instance_of_identifier(identifier)
+            if type_name is None or instance is None:
+                continue
+            if type_name in ("device", "notification-class"):
+                continue
+            ac_number, member_number = divmod(instance, MEMBERS_PER_UNIT)
+            member = MEMBERS.get(member_number)
+            if member is None or str(member.object_type) != type_name:
+                # A member we do not model, or a type that does not match the
+                # member we would decode the instance as. Both are reported,
+                # neither is assumed. Counted by kind rather than listed by
+                # instance, because one unmodelled member on a 96-group
+                # gateway is 96 identical lines.
+                kind = f"{type_name} member {member_number}"
+                unrecognised[kind] = unrecognised.get(kind, 0) + 1
+                continue
+            members.setdefault(ac_number, set()).add(member_number)
+
+        return ObjectMap(
+            members={ac: frozenset(found) for ac, found in members.items()},
+            unrecognised=dict(sorted(unrecognised.items())),
+            total=len(objects),
+        )
+
+    async def _read_object_list(self) -> list[Any] | None:
+        """The Object_List, whole if it fits and paged if it does not."""
+        device_id = f"device,{self.device_instance}"
+        try:
+            objects = await self._read_one(
+                device_id, "object-list", timeout=OBJECT_LIST_TIMEOUT
+            )
+            if objects:
+                return list(objects)
+        except DbacsNotReady:
+            # The gateway is scanning DIII-NET. That is not a reason to fall
+            # back to a slower method; it is a reason to ask again shortly.
+            raise
+        except DbacsError as err:
+            _LOGGER.debug(
+                "%s would not give up its whole Object_List (%s); paging it",
+                self.host,
+                err,
+            )
+        except TypeError:
+            _LOGGER.debug("%s returned an Object_List we cannot read", self.host)
+
+        return await self._page_object_list(device_id)
+
+    async def _page_object_list(self, device_id: str) -> list[Any] | None:
+        """Read the Object_List an element at a time.
+
+        The slow path, for a gateway that will not segment the whole array.
+        Index 0 is the length, so the cost is known before it is paid.
+        """
+        count = await self.read_object_list_count()
+        if not count:
+            return None
+        if count > OBJECT_LIST_PAGE_LIMIT:
+            _LOGGER.warning(
+                "%s holds %d objects, too many to page one at a time; "
+                "falling back to probing each group",
+                self.host,
+                count,
+            )
+            return None
+
+        objects: list[Any] = []
+        for index in range(1, count + 1):
+            try:
+                value = await self._read_one(
+                    device_id, "object-list", array_index=index
+                )
+            except DbacsNotReady:
+                raise
+            except DbacsUnreachable:
+                return None
+            except DbacsError:
+                continue  # a hole in the array is not a failure of the read
+            if value is not None:
+                objects.append(value)
+        return objects or None
+
     async def probe_groups(
         self, ac_numbers: Iterable[int]
     ) -> dict[int, bool]:
@@ -424,20 +651,13 @@ class DbacsGateway:
         Index 0 of an array property is its length, so this costs one read
         rather than the ~45 KB a full Object_List would segment into.
         """
-        if self._app is None:
-            raise DbacsUnreachable("not connected")
         try:
-            async with self._semaphore:
-                value = await asyncio.wait_for(
-                    self._app.read_property(
-                        self._address,
-                        ("device", self.device_instance),
-                        "object-list",
-                        array_index=0,
-                    ),
-                    timeout=REQUEST_TIMEOUT,
-                )
-        except (TimeoutError, asyncio.TimeoutError, OSError):
+            value = await self._read_one(
+                f"device,{self.device_instance}", "object-list", array_index=0
+            )
+        except DbacsNotReady:
+            raise
+        except DbacsError:
             return None
         return _int(value)
 
@@ -575,6 +795,29 @@ def _map_error(response: Any) -> DbacsError:
 def _reason(err: BaseException) -> str:
     text = str(err).strip()
     return text or type(err).__name__
+
+
+def _type_of_identifier(value: Any) -> str | None:
+    """The object type out of an Object_Identifier, as a plain name."""
+    if value is None:
+        return None
+    try:
+        return str(value[0])
+    except (TypeError, IndexError, KeyError):
+        return None
+
+
+def _instance_of_identifier(value: Any) -> int | None:
+    """The instance out of an Object_Identifier, however it is represented."""
+    if value is None:
+        return None
+    if isinstance(value, (tuple, list)) and len(value) == 2:
+        return _int(value[1])
+    # bacpypes3's ObjectIdentifier indexes like a 2-tuple but is not one.
+    try:
+        return _int(value[1])
+    except (TypeError, IndexError, KeyError):
+        return None
 
 
 def _text(value: Any) -> str | None:

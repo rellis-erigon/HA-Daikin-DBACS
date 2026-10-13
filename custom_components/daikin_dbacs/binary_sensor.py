@@ -13,6 +13,9 @@ from . import DbacsConfigEntry
 from .entity import DbacsEntity
 from .objects import Kind, Member, ObjType, READABLE, is_binary_active
 
+#: Every readable member; the coordinator narrows it per group.
+_ALL_KEYS = tuple(member.key for member in READABLE)
+
 #: Which binary points carry a device class, and which are just states.
 _DEVICE_CLASSES: dict[str, BinarySensorDeviceClass] = {
     "on_off_status": BinarySensorDeviceClass.RUNNING,
@@ -30,13 +33,13 @@ async def async_setup_entry(
     entry: DbacsConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """One binary sensor per binary status point of every live group."""
+    """One binary sensor per binary status point a live group publishes."""
     coordinator = entry.runtime_data
     async_add_entities(
-        DbacsBinarySensor(coordinator, ac_number, member)
+        DbacsBinarySensor(coordinator, point.ac_number, point.member)
         for ac_number in coordinator.active_groups
-        for member in READABLE
-        if _is_binary_sensor(member)
+        for point in coordinator.points_of(ac_number, _ALL_KEYS)
+        if _is_binary_sensor(point.member)
     )
 
 

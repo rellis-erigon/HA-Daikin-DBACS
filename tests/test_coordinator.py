@@ -18,7 +18,12 @@ from custom_components.daikin_dbacs.const import (
     OPT_USE_COV,
 )
 from custom_components.daikin_dbacs.coordinator import DbacsCoordinator
-from custom_components.daikin_dbacs.objects import DEFAULT_MEMBERS, address_label
+from custom_components.daikin_dbacs.objects import (
+    DEFAULT_MEMBERS,
+    MEMBERS,
+    address_label,
+    instance_of,
+)
 
 import fake_gateway as fake
 
@@ -307,3 +312,111 @@ class TestGatewayRestart:
 
 async def _no_sleep(_seconds):
     return None
+
+
+class TestObjectListDiscovery:
+    """Discovery from the gateway's own Object_List.
+
+    Shaped after a real gateway: ninety-odd groups that publish twenty-eight
+    members, a couple that publish two more, no ventilation members at all
+    because the firmware predates them, and one object the integration does
+    not model.
+    """
+
+    def _state(self):
+        common = set(MEMBERS) - {17, 21, 32, 33, 34, 35}
+        richer = set(MEMBERS) - {32, 33, 34, 35}
+        populated = set(range(0, 9)) | set(range(10, 16))
+        members = {ac: set(common) for ac in populated}
+        members[0] = set(richer)
+        members[1] = set(richer)
+        return fake.FakeGatewayState(
+            populated=populated,
+            members=members,
+            # A member number nothing models, as a firmware revision may add.
+            extra_objects=[("binary-input", 99)],
+        )
+
+    def test_finds_the_groups_the_list_names(self):
+        coordinator, _ = build(self._state())
+        discovery = run(coordinator.async_discover())
+        # The gap at 1-09 is a real shape: a line with one address unwired.
+        assert len(discovery.live_numbers) == 15
+        assert 9 not in discovery.live_numbers
+        assert discovery.discovered_by == "its Object_List"
+
+    def test_records_which_members_each_group_publishes(self):
+        coordinator, _ = build(self._state())
+        discovery = run(coordinator.async_discover())
+        assert 21 in discovery.members_of(0)
+        assert 21 not in discovery.members_of(5)
+        # Firmware decides whether the ventilation members exist at all.
+        assert 32 not in discovery.members_of(0)
+
+    def test_reads_no_point_the_gateway_does_not_have(self):
+        coordinator, _ = build(
+            self._state(),
+            options={OPT_MEMBERS: ["room_temp", "system_forced_off"]},
+        )
+        run(coordinator.async_discover())
+        points = coordinator.points()
+        forced = {p.ac_number for p in points if p.member.key == "system_forced_off"}
+        # Only the two groups that carry it, not all fifteen.
+        assert forced == {0, 1}
+        assert len([p for p in points if p.member.key == "room_temp"]) == 15
+
+    def test_a_sweep_of_a_narrowed_list_errors_on_nothing(self):
+        coordinator, _ = build(
+            self._state(),
+            options={OPT_MEMBERS: ["room_temp", "system_forced_off"]},
+        )
+        run(coordinator.async_discover())
+        data = run(coordinator._async_update_data())
+        assert data
+        assert all(reading.ok for reading in data.values())
+
+    def test_an_object_it_does_not_model_is_recorded_not_guessed(self):
+        coordinator, _ = build(self._state())
+        discovery = run(coordinator.async_discover())
+        assert discovery.unrecognised == {"binary-input member 99": 1}
+
+    def test_an_object_whose_type_is_wrong_is_not_decoded(self):
+        # The object type is the top ten bits of the identifier, so a type
+        # that does not match the member is not the object we would take it
+        # for.
+        state = self._state()
+        state.extra_objects = [("analog-input", instance_of(0, 2))]
+        coordinator, _ = build(state)
+        discovery = run(coordinator.async_discover())
+        assert any("analog-input" in kind for kind in discovery.unrecognised)
+
+    def test_falls_back_to_probing_when_the_list_is_refused(self):
+        state = self._state()
+        state.serves_object_list = False
+        coordinator, _ = build(state)
+        discovery = run(coordinator.async_discover())
+        assert discovery.discovered_by == "probing every slot"
+        assert len(discovery.live_numbers) == 15
+        # Probing cannot tell which members a group carries, so the full set
+        # is assumed rather than invented.
+        assert discovery.members_of(0) is None
+
+    def test_a_probed_group_still_gets_its_points(self):
+        state = self._state()
+        state.serves_object_list = False
+        coordinator, _ = build(state, options={OPT_MEMBERS: ["room_temp"]})
+        run(coordinator.async_discover())
+        assert len(coordinator.points()) == 15
+
+    def test_change_of_value_skips_a_member_a_group_lacks(self):
+        state = self._state()
+        for ac in state.members:
+            state.members[ac].discard(3)  # no alarm object anywhere
+        coordinator, _ = build(state)
+        run(coordinator.async_discover())
+        run(coordinator.async_setup_cov())
+        subscribed = {
+            member for _type, member in
+            [(t, i % 256) for t, i in state.subscriptions]
+        }
+        assert 3 not in subscribed

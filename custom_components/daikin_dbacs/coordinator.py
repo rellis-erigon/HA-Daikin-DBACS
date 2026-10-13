@@ -56,6 +56,17 @@ class GroupState:
     """The gateway publishes objects for it."""
     communicating: bool | None = None
     """Its DIII-NET communication status, where we have read it."""
+    members: frozenset[int] | None = None
+    """Which member numbers this group publishes.
+
+    None means we could not find out and have to assume the full set — the
+    probing fallback cannot tell. Groups genuinely differ: two on a system
+    may carry Forced stop while the rest do not, and older firmware carries
+    none of the ventilation members.
+    """
+
+    def publishes(self, member_number: int) -> bool:
+        return self.members is None or member_number in self.members
 
     @property
     def label(self) -> str:
@@ -80,6 +91,12 @@ class Discovery:
     absent: tuple[int, ...] = ()
     dead: tuple[int, ...] = ()
     object_count: int | None = None
+    unrecognised: dict[str, int] = field(default_factory=dict)
+    discovered_by: str = ""
+
+    def members_of(self, ac_number: int) -> frozenset[int] | None:
+        group = self.groups.get(ac_number)
+        return None if group is None else group.members
 
     @property
     def live_numbers(self) -> tuple[int, ...]:
@@ -166,21 +183,55 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         live. Absent and dead groups get no Home Assistant device, and both
         are listed in diagnostics so a group that comes back is noticed.
         """
-        found = await self.gateway.with_retry_when_not_ready(
-            lambda: self.gateway.probe_groups(ALL_AC_NUMBERS)
+        object_map = await self.gateway.with_retry_when_not_ready(
+            self.gateway.read_object_map
         )
 
-        groups = {
-            ac: GroupState(ac_number=ac, present=present)
-            for ac, present in sorted(found.items())
-        }
+        if object_map is not None:
+            groups = {
+                ac: GroupState(
+                    ac_number=ac,
+                    present=ac in object_map.members,
+                    members=object_map.members.get(ac),
+                )
+                for ac in ALL_AC_NUMBERS
+            }
+            unrecognised = object_map.unrecognised
+            object_count = object_map.total
+            how = "its Object_List"
+        else:
+            # The gateway would not give up its Object_List. Probing each
+            # slot still finds the groups; it just cannot tell which members
+            # each one carries, so the full set is assumed.
+            found = await self.gateway.with_retry_when_not_ready(
+                lambda: self.gateway.probe_groups(ALL_AC_NUMBERS)
+            )
+            groups = {
+                ac: GroupState(ac_number=ac, present=present)
+                for ac, present in sorted(found.items())
+            }
+            unrecognised = {}
+            object_count = await self.gateway.read_object_list_count()
+            how = "probing every slot"
+
         present_numbers = [ac for ac, group in groups.items() if group.present]
         _LOGGER.debug(
-            "%s publishes %d of %d possible groups",
+            "%s publishes %d of %d possible groups, found by %s",
             self.gateway.host,
             len(present_numbers),
             len(ALL_AC_NUMBERS),
+            how,
         )
+        if unrecognised:
+            _LOGGER.info(
+                "%s publishes objects this integration does not model, which "
+                "are ignored: %s",
+                self.gateway.host,
+                ", ".join(
+                    f"{kind} x{count}"
+                    for kind, count in sorted(unrecognised.items())
+                ),
+            )
 
         # A published group may still be wired to nothing that answers, so
         # ask each one how its DIII-NET side is doing before believing in it.
@@ -208,7 +259,9 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
                 for ac, group in groups.items()
                 if group.present and group.communicating is False
             ),
-            object_count=await self.gateway.read_object_list_count(),
+            object_count=object_count,
+            unrecognised=unrecognised,
+            discovered_by=how,
         )
         self.discovery = discovery
 
@@ -240,12 +293,29 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         return tuple(ac for ac in live if ac in chosen)
 
     def points(self) -> list[PointRef]:
-        """Every point a sweep should read."""
+        """Every point a sweep should read.
+
+        Narrowed to what each group actually publishes, so we never spend a
+        read on an object the gateway will answer unknown-object for, and
+        never create an entity that could only ever be unavailable.
+        """
         keys = self.enabled_member_keys
         points: list[PointRef] = []
         for ac in self.active_groups:
-            points.extend(points_for(ac, keys))
+            points.extend(self.points_of(ac, keys))
         return points
+
+    def points_of(
+        self, ac_number: int, member_keys: tuple[str, ...] | None = None
+    ) -> list[PointRef]:
+        """One group's points, limited to the members it publishes."""
+        keys = self.enabled_member_keys if member_keys is None else member_keys
+        group = self.discovery.groups.get(ac_number)
+        return [
+            point
+            for point in points_for(ac_number, keys)
+            if group is None or group.publishes(point.member.number)
+        ]
 
     # --- the sweep -----------------------------------------------------------
 
@@ -381,8 +451,12 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
 
         accepted = 0
         for ac in self.active_groups:
+            group = self.discovery.groups.get(ac)
             for key in wanted:
-                point = PointRef(ac, MEMBERS_BY_KEY[key])
+                member = MEMBERS_BY_KEY[key]
+                if group is not None and not group.publishes(member.number):
+                    continue
+                point = PointRef(ac, member)
                 if point.key in self._cov_points:
                     continue
                 try:

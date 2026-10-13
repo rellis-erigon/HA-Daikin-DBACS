@@ -15,19 +15,28 @@ from . import DbacsConfigEntry
 from .entity import DbacsEntity
 from .objects import Kind, Member, ObjType, READABLE, member_state
 
+#: Every readable member, so the platform sees the full candidate list and
+#: the coordinator narrows it to what the group publishes.
+_ALL_KEYS = tuple(member.key for member in READABLE)
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: DbacsConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """One sensor per non-binary point of every live group."""
+    """One sensor per non-binary point every live group publishes.
+
+    Built from the group's own point list rather than from the member table,
+    because groups genuinely differ in what they carry. An entity for an
+    object the gateway does not have could only ever be unavailable.
+    """
     coordinator = entry.runtime_data
     async_add_entities(
-        DbacsSensor(coordinator, ac_number, member)
+        DbacsSensor(coordinator, point.ac_number, point.member)
         for ac_number in coordinator.active_groups
-        for member in READABLE
-        if _is_sensor(member)
+        for point in coordinator.points_of(ac_number, _ALL_KEYS)
+        if _is_sensor(point.member)
     )
 
 
@@ -60,6 +69,11 @@ class DbacsSensor(DbacsEntity, SensorEntity):
         elif member.unit == "energy":
             self._attr_device_class = SensorDeviceClass.ENERGY
             self._attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+            self._attr_state_class = SensorStateClass.TOTAL_INCREASING
+        elif member.unit == "volume":
+            # No device class: what this accumulator counts is inferred
+            # rather than documented, and a wrong device class would put it
+            # on the energy dashboard as a fact.
             self._attr_state_class = SensorStateClass.TOTAL_INCREASING
         elif member.states:
             self._attr_device_class = SensorDeviceClass.ENUM

@@ -49,10 +49,13 @@ async def async_get_config_entry_diagnostics(
             "object_count": discovery.object_count,
         },
         "discovery": {
+            "method": discovery.discovered_by,
             "live": [address_label(ac) for ac in discovery.live_numbers],
             "live_count": len(discovery.live_numbers),
             "absent_count": len(discovery.absent),
             "dead": [address_label(ac) for ac in discovery.dead],
+            "member_sets": _member_sets(coordinator),
+            "unrecognised_objects": dict(discovery.unrecognised),
             "note": (
                 "Absent groups returned unknown-object: the gateway has no "
                 "such point. Dead groups publish points but report a "
@@ -79,3 +82,29 @@ async def async_get_config_entry_diagnostics(
             if coordinator.fault_code(ac)
         },
     }
+
+
+def _member_sets(coordinator) -> list[dict[str, Any]]:
+    """How many groups publish which set of members.
+
+    Worth reporting because they differ: a system can have two groups
+    carrying Forced stop while the rest do not, and firmware decides whether
+    the ventilation members exist at all. A support question about a missing
+    entity is usually this.
+    """
+    tally: dict[tuple[int, ...], list[int]] = {}
+    for ac_number in coordinator.discovery.live_numbers:
+        members = coordinator.discovery.members_of(ac_number)
+        key = tuple(sorted(members)) if members is not None else ()
+        tally.setdefault(key, []).append(ac_number)
+    return [
+        {
+            "members": list(members) or "unknown (found by probing)",
+            "member_count": len(members),
+            "group_count": len(groups),
+            "example": address_label(groups[0]),
+        }
+        for members, groups in sorted(
+            tally.items(), key=lambda item: -len(item[1])
+        )
+    ]

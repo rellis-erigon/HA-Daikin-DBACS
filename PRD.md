@@ -1,6 +1,6 @@
 # Daikin D-BACS for Home Assistant — PRD
 
-**Status:** Phase 1 implemented · **Revised:** 2026-10-13 · **Target HA:** 2026.10 or later
+**Status:** Phase 1 implemented and verified against a production gateway · **Revised:** 2026-10-13 · **Target HA:** 2026.10 or later
 
 A Home Assistant custom integration that talks BACnet/IP to a Daikin
 "Interface for use in BACnet" gateway, turns each indoor-unit group into a
@@ -207,12 +207,18 @@ loop. DBACS needs none of that: the object model is fixed and computable, the
 point count per group is 35, and `bacpypes3` is asyncio. A single integration
 keeps installation to "HACS → add → type an IP".
 
-**Unicast only — no Who-Is broadcast required.** You give us the IP. Device
-discovery is one unicast Who-Is to that address to learn the device instance
-(with a manual override if it does not answer), then everything is directed
-traffic. This matters twice: broadcast BACnet is what forces BBMD
-configuration and breaks across VLANs, and a quiet client is a client that
-cannot confuse the head-end.
+**Unicast only — no Who-Is broadcast required.** You give us the IP, and
+everything after that is directed traffic. This matters twice: broadcast
+BACnet is what forces BBMD configuration and breaks across VLANs, and a quiet
+client is a client that cannot confuse the head-end.
+
+Learning the device instance takes two attempts, in order, because the
+obvious one often cannot work. A device answers Who-Is with I-Am, and **I-Am
+is normally broadcast** — so across a routed boundary a perfectly reachable
+gateway appears not to answer. The fallback is a plain unicast ReadProperty
+of `Object_Identifier` on `device,4194303`, BACnet's unconfigured instance,
+which a gateway that accepts it answers with its real one. Manual entry is
+the third resort rather than the second.
 
 **We are a BACnet device too, and must not collide.** The integration binds a
 local UDP port — default `47808`, overridable — and presents its own device
@@ -243,27 +249,26 @@ its own review.
    ReadProperty fails the form with a readable reason.
 2. **Multiple gateways:** each is its own config entry. Falls out of doing
    the config flow properly; no extra work.
-3. **Discovery, designed for a full gateway** (decision 5):
-   - Probe one cheap point per AC number — all 256 — batched into
-     ReadPropertyMultiple requests. `UNKNOWN_OBJECT` is the gateway saying
-     the slot is not populated.
-   - Then read `CommunicationStatus` on everything that answered. A group
+3. **Discovery, from the gateway's own `Object_List`** (decision 5):
+   - Read `Object_List` in one segmented request and decode each identifier
+     into *(AC number, member)*, rejecting any whose object type does not
+     match the member it would decode as.
+   - Then read `CommunicationStatus` on every group that appeared. A group
      that publishes objects but reports a DIII-NET fault is populated but
      **dead**. Absent and dead are both skipped, both listed in diagnostics,
      and both picked up automatically if they come back.
    - Retry on `CONFIGURATION_IN_PROGRESS` with backoff — the gateway is
      scanning D3 and the answer is "not yet", not "nothing there".
+   - **Fall back** to paging the array element by element, and then to
+     probing every slot, for a gateway that will not give the list up.
 
-   **This replaces reading `Object_List` as the primary mechanism, and the
-   change is deliberate.** A full gateway's object list is ~9,000 identifiers
-   and roughly 45 KB once segmented — one large, slow, all-or-nothing read
-   that tells us which *objects* exist when the question is which *groups*
-   do. The probe sweep is 32 small requests, each independently
-   attributable, and it uses the gateway's own `UNKNOWN_OBJECT` answer rather
-   than inferring absence from a list. `Object_List` is still read, but only
-   its length (array index 0, one read) and only for diagnostics. Reading the
-   full list becomes worthwhile in Phase 4, where which *members* a group
-   publishes starts to matter — accumulated power is model-dependent.
+   An earlier revision of this document made probing the primary mechanism,
+   on an estimate that a full `Object_List` would be ~9,000 identifiers and
+   ~45 KB segmented. **That estimate was wrong and the field test settled
+   it** — see §8. The list is one quick read, and it answers a question
+   probing cannot: *which members* each group publishes. Those differ group
+   to group and by firmware, and without that map the integration creates
+   entities that can only ever be unavailable.
 4. **Grouping:** one HA device per live AC number. Default name is its DIII
    address, `DBACS 2 · 1-05`, with port, line and group as device attributes.
    Identifiers are `(domain, entry_id, ac_number)` so nothing re-creates on
@@ -488,24 +493,17 @@ regions are added, which is a small HA-Cards change and worth doing.
 
 ## 6. Still to find out
 
-Facts to look up rather than decisions to make. None of them block starting
-Phase 1 against a synthetic gateway.
+Facts to look up rather than decisions to make.
 
-1. **Exact gateway model** — `DMS502B51` or `DMS502B71`, and the firmware
-   version. `Active_COV_Subscriptions` needs 6.20 or later; members 32–35
-   need edition G. A photograph of the label settles it.
-2. **Gateway device instance number** — set with Daikin's Trial Operation
-   tool. Read from a unicast Who-Is if it answers; otherwise it comes from
-   whoever commissioned the box.
-3. **A free BACnet device instance for us**, and confirmation that UDP 47808
-   on the HA host is not already taken by another BACnet client.
-4. **°C or °F** on the gateway. Assumed °C until confirmed.
-5. **What the head-end holds** — its `Priority_Array` usage and
-   `Active_COV_Subscriptions`, which the Phase 1 probe will report, and
-   ideally who maintains it.
-6. **The group → outdoor-unit mapping** for Phase 4, from commissioning data.
-7. **Which `TempAdjust` limits apply** per indoor model present, for Phase 2
-   setpoint clamping.
+| | Status |
+|---|---|
+| Gateway model and firmware | **Answered** by the field test. Firmware is new enough for `Active_COV_Subscriptions` and too old for members 32–35. |
+| Gateway device instance | **Answered**, and no longer needs asking: the wildcard-instance read in §2 learns it without a broadcast. |
+| A free BACnet device instance for us, and whether UDP 47808 is free on the HA host | **Open.** Both are config-flow fields with sensible defaults, so this surfaces as a bind failure rather than a mystery. |
+| °C or °F | **Answered** — °C, with setpoints and room temperatures reading as expected. |
+| What a sharing head-end holds | **Partly.** `Active_COV_Subscriptions` was empty and `Priority_Array` reads back, so Phase 2 can survey it properly. Who maintains the head-end is still worth knowing before any write. |
+| The group → outdoor-unit mapping | **Open**, needed for Phase 4. Comes from commissioning data. |
+| `TempAdjust` limits per indoor model | **Open**, needed for Phase 2 setpoint clamping. |
 
 ---
 
@@ -521,7 +519,80 @@ is exactly why having that formula matters: **a complete, realistic
 
 ---
 
-## 8. Sources
+## 8. Field notes — verified against a production gateway
+
+Phase 1 was tested read-only against a live Daikin BACnet interface. Nothing
+was written and nothing was subscribed. Everything below changed the code,
+and none of it was visible from the documentation alone.
+
+**Four `bacpypes3` API facts the type annotations do not tell you.** Each one
+would have failed silently or at the first real read:
+
+1. `read_property_multiple` takes its parameter list **flat** — object,
+   properties, object, properties — although it is annotated as a list of
+   pairs. A list of pairs raises `ValueError` inside the library.
+2. Object identifiers must be an `ObjectIdentifier` or the `"type,instance"`
+   **string**. A plain tuple raises `TypeError`.
+3. `read_property` **returns** an error, reject or abort object in place of
+   the value rather than raising it, exactly as `read_property_multiple`
+   does. Without unwrapping it, a failure reads as data.
+4. A change-of-value subscription's `get_value()` yields **one**
+   `(property, value)` pair, not a list of them. Iterating it loses every
+   notification, and because the sweep is the safety net the only symptom
+   would have been "change-of-value does not seem to do much".
+
+**Protocol behaviour, confirmed:**
+
+- `Object_List` is **one segmented read**, not the tens of kilobytes
+  estimated in §3. It is the right discovery mechanism.
+- **Groups differ in which members they publish.** On the gateway tested,
+  most groups carried neither Forced stop nor Reject sub-group control while
+  a couple carried both. Creating entities from the member table rather than
+  from the list produces entities that are permanently unavailable.
+- **Firmware decides whether members exist at all.** The ventilation members
+  32–35 arrived in specification edition G; on earlier firmware every group
+  answers `unknown-object` for them.
+- **Member 18 is published as an `Accumulator`**, though the specification
+  names no object for it and marks it Japanese-market-only. It is modelled,
+  off by default, and labelled with the inference stated — leaving it out
+  produced one "unrecognised object" entry per group, which is noise rather
+  than a diagnostic.
+- `MalfunctionCode` reads **1 when healthy**, as assumed, and its range is
+  1–512 against a table published separately from these specifications.
+- `TempAdjust`'s `Relinquish_Default` is **25.0 °C**, as documented.
+- `Priority_Array` reads back all sixteen slots, so Phase 2 can survey what a
+  head-end holds before writing anything.
+- `Active_COV_Subscriptions` was **empty**, so a head-end sharing the gateway
+  is not necessarily using change-of-value, and all five recipient slots per
+  object may be free.
+- `Protocol_Services_Supported` lists SubscribeCOV, ReadProperty,
+  ReadPropertyMultiple, WriteProperty, WritePropertyMultiple and
+  DeviceCommunicationControl — and **no event notification services**, which
+  independently supports decision 7.
+- Binary present-values arrive as BACnet `BinaryPV` enumerations rather than
+  as integers or strings, and temperatures arrive as float32 artefacts
+  (`21.600000381469727`), so both need normalising.
+
+**Measured, on a system with most of one DIII-NET port populated:**
+
+| | |
+|---|---|
+| Connect and identify | ~3.5 s |
+| Discovery, whole `Object_List` plus communication status | ~1.1 s |
+| Sweep, the ten default members | ~2.3 s |
+| Sweep, **every** member of every published group | ~4.5 s, zero errors |
+
+**This makes the §4.2 load worry much smaller than it looked.** The 8,960
+point ceiling is a theoretical fully-expanded gateway; a real one reads
+everything it has in under five seconds. The 300-second default sweep is
+therefore very conservative, and could reasonably go to 60–120 seconds so
+that setpoint and mode changes made at a wall controller appear promptly
+rather than up to five minutes later. That is a change to decision 6 and is
+left for review rather than taken unilaterally.
+
+---
+
+## 9. Sources
 
 - Daikin, *Interface for use in BACnet® Version 6 — BACnet/IP Functional Specifications* (CB07A004G) — [PDF](https://tinlavir.ro/parteneri/2_VRV/4_Control_Systems/06_BACnet_Gateway/Documents/Databooks/DMS502B51-71_FunctionalSpecifications1_ver6.34.00(CB07A004G)_tcm135-86223%20(1).pdf)
 - Daikin, *Design Guide — Interface for use in BACnet®* (EDUS72-749C, DMS502B71) — [PDF](https://daikincomfort.com/docs/default-source/interface-for-use-bacnet-/eg-dms502b71bacnet-guide.pdf)

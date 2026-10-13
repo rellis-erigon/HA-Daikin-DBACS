@@ -55,16 +55,57 @@ class TestIdentity:
         info = run(gateway.read_info())
         assert info.device_instance == state.device_instance
 
-    def test_an_unreachable_gateway_says_what_to_do_about_it(
+    def test_falls_back_to_the_wildcard_instance_when_who_is_is_silent(
         self, gateway, state
     ):
+        # I-Am is normally broadcast, so a reachable gateway routinely
+        # appears not to answer a unicast Who-Is. Reading the device object
+        # at instance 4194303 is one plain unicast request and works where a
+        # broadcast cannot.
+        state.answers_who_is = False
         gateway.device_instance = None
-        state.offline = True
+        info = run(gateway.read_info())
+        assert info.device_instance == state.device_instance
+
+    def test_prefers_i_am_when_there_is_one(self, gateway, state):
+        state.answers_wildcard = False
+        gateway.device_instance = None
+        info = run(gateway.read_info())
+        assert info.device_instance == state.device_instance
+
+    def test_says_what_to_do_when_neither_way_works(self, gateway, state):
+        state.answers_who_is = False
+        state.answers_wildcard = False
+        gateway.device_instance = None
         with pytest.raises(gw.DbacsUnreachable) as caught:
             run(gateway.read_info())
-        # The message has to carry the remedy: when Who-Is goes unanswered
-        # the instance number has to come from whoever commissioned the box.
-        assert "device instance" in str(caught.value)
+        # The message has to carry the remedy: the instance number comes
+        # from whoever commissioned the box.
+        message = str(caught.value)
+        assert "instance" in message
+        assert "Trial Operation tool" in message
+
+    def test_an_unreachable_gateway_is_reported_as_such(self, gateway, state):
+        gateway.device_instance = None
+        state.offline = True
+        with pytest.raises(gw.DbacsUnreachable):
+            run(gateway.read_info())
+
+    def test_a_wildcard_answer_of_the_wildcard_is_not_an_answer(
+        self, gateway, state, monkeypatch
+    ):
+        state.answers_who_is = False
+        state.answers_wildcard = False
+        gateway.device_instance = None
+
+        async def answers_with_the_wildcard(*_args, **_kwargs):
+            return ("device", gw.WILDCARD_INSTANCE)
+
+        monkeypatch.setattr(
+            gateway._app, "read_property", answers_with_the_wildcard
+        )
+        with pytest.raises(gw.DbacsUnreachable):
+            run(gateway.read_info())
 
     def test_restart_token_changes_when_the_gateway_restarts(
         self, gateway, state
@@ -209,7 +250,9 @@ class TestErrorMapping:
         assert "segmentation-not-supported" in str(mapped)
 
     def test_a_list_of_results_is_not_mistaken_for_a_failure(self):
-        assert not gw._is_failure([(("analog-input", 1), "present-value", None, 1.0)])
+        assert not gw._is_failure(
+            [(("analog-input", 1), "present-value", None, 1.0)]
+        )
 
 
 class TestChangeOfValue:

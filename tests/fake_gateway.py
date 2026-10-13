@@ -16,10 +16,17 @@ from typing import Any
 
 from custom_components.daikin_dbacs.objects import (
     MEMBERS,
-    READABLE,
     instance_of,
     split_instance,
 )
+
+
+def _split_identifier(object_id) -> tuple[str, int]:
+    """Accept the forms bacpypes3 does: "type,instance", or an indexable."""
+    if isinstance(object_id, str):
+        type_name, _, instance = object_id.partition(",")
+        return type_name, int(instance)
+    return str(object_id[0]), int(object_id[1])
 
 
 class FakeError:
@@ -61,6 +68,19 @@ class FakeGatewayState:
     scanning_for: int = 0
     #: Fail every request, as an unreachable gateway would.
     offline: bool = False
+    #: Whether a unicast Who-Is is answered. Real gateways often do not,
+    #: because I-Am is broadcast and cannot cross a routed boundary.
+    answers_who_is: bool = True
+    #: Whether the device object can be read at the wildcard instance.
+    answers_wildcard: bool = True
+    #: Whether the gateway gives up its Object_List at all.
+    serves_object_list: bool = True
+    #: Which members each group publishes. None means all of them. Real
+    #: gateways differ group to group, and by firmware.
+    members: dict[int, set[int]] | None = None
+    #: Objects the integration does not model, as (type, instance) pairs.
+    #: Member 18 is real, Japanese-market-only, and turns up in the wild.
+    extra_objects: list[tuple[str, int]] = field(default_factory=list)
     #: Object instances that should answer with an error instead of a value.
     broken: set[int] = field(default_factory=set)
     #: How many subscriptions to accept before refusing, as the gateway does
@@ -82,6 +102,31 @@ class FakeGatewayState:
     def notify(self, value: Any, prop: str = "present-value") -> None:
         """Queue a notification, as the gateway sends one when a point moves."""
         self.notifications.put_nowait((prop, value))
+
+    def published(self, ac_number: int, member_number: int) -> bool:
+        """Whether this group publishes this member."""
+        if ac_number not in self.populated:
+            return False
+        if self.members is None:
+            return member_number in MEMBERS
+        return member_number in self.members.get(ac_number, set())
+
+    def object_list(self) -> list[tuple[str, int]]:
+        """The gateway's Object_List, as it would report it."""
+        objects: list[tuple[str, int]] = [("device", self.device_instance)]
+        for ac_number in sorted(self.populated):
+            for member_number in sorted(MEMBERS):
+                if not self.published(ac_number, member_number):
+                    continue
+                member = MEMBERS[member_number]
+                objects.append(
+                    (
+                        str(member.object_type),
+                        instance_of(ac_number, member_number),
+                    )
+                )
+        objects.extend(self.extra_objects)
+        return objects
 
     def present_value(self, instance: int) -> Any:
         """A plausible Present_Value for a point, derived from its address."""
@@ -128,6 +173,10 @@ class FakeApp:
     async def who_is(self, address=None, **_kwargs):
         if self.state.offline:
             raise TimeoutError("no answer")
+        if not self.state.answers_who_is:
+            # bacpypes3 returns an empty list rather than raising when no
+            # I-Am arrives, which is what a broadcast-only I-Am looks like.
+            return []
         return [FakeIAm(("device", self.state.device_instance))]
 
     # --- reads ---------------------------------------------------------------
@@ -135,33 +184,64 @@ class FakeApp:
     async def read_property(
         self, _address, objid, prop, array_index=None, **_kwargs
     ):
+        # bacpypes3 *returns* an error object in place of the value rather
+        # than raising it, so the fake does the same or it would hide the
+        # one mistake worth catching here.
         if self.state.offline:
             raise TimeoutError("no answer")
-        if str(prop) == "object-list" and array_index == 0:
-            return len(self.state.populated) * len(READABLE)
+        if self.state.scanning_for > 0:
+            self.state.scanning_for -= 1
+            return FakeReject("device", "configuration-in-progress")
+        if str(prop) == "object-list":
+            if not self.state.serves_object_list:
+                return FakeError("property", "unknown-property")
+            objects = self.state.object_list()
+            if array_index == 0:
+                return len(objects)
+            if array_index is not None:
+                if 1 <= array_index <= len(objects):
+                    return objects[array_index - 1]
+                return FakeError("property", "invalid-array-index")
+            return objects
+        if str(prop) == "object-identifier":
+            if not self.state.answers_wildcard:
+                return FakeError("object", "unknown-object")
+            return ("device", self.state.device_instance)
         return None
 
     async def read_property_multiple(self, _address, parameter_list, **_kwargs):
         if self.state.offline:
             raise TimeoutError("no answer")
-        self.state.rpm_calls.append(parameter_list)
+
+        # bacpypes3 takes the parameter list flat - object, properties,
+        # object, properties - whatever its type annotation says, so the fake
+        # insists on the same shape.
+        if len(parameter_list) % 2:
+            raise ValueError("read access specification expected")
+        pairs = list(
+            zip(parameter_list[::2], parameter_list[1::2], strict=True)
+        )
+        self.state.rpm_calls.append(pairs)
 
         if self.state.scanning_for > 0:
             self.state.scanning_for -= 1
             return FakeReject("device", "configuration-in-progress")
 
         results: list[tuple] = []
-        for object_id, properties in parameter_list:
-            type_name, instance = str(object_id[0]), int(object_id[1])
+        for object_id, properties in pairs:
+            type_name, instance = _split_identifier(object_id)
+            # A real response carries an ObjectIdentifier, which indexes
+            # like a (type, instance) pair, not the string the request used.
+            answered_as = (type_name, instance)
             for prop in properties:
                 name = str(prop)
                 if name != "present-value":
                     results.append(
-                        (object_id, name, None, self._device_property(name))
+                        (answered_as, name, None, self._device_property(name))
                     )
                     continue
                 results.append(
-                    (object_id, name, None, self._value(type_name, instance))
+                    (answered_as, name, None, self._value(type_name, instance))
                 )
         return results
 
@@ -184,8 +264,8 @@ class FakeApp:
     def _value(self, _type_name: str, instance: int) -> Any:
         if instance in self.state.broken:
             return FakeError("property", "write-access-denied")
-        ac_number, _member = split_instance(instance)
-        if ac_number not in self.state.populated:
+        ac_number, member_number = split_instance(instance)
+        if not self.state.published(ac_number, member_number):
             return FakeError("object", "unknown-object")
         return self.state.present_value(instance)
 
@@ -207,7 +287,7 @@ class _FakeSubscription:
         if len(self.state.subscriptions) >= self.state.cov_budget:
             raise RuntimeError("cov-subscription-failed")
         self.state.subscriptions.append(
-            (str(self.object_identifier[0]), int(self.object_identifier[1]))
+            _split_identifier(self.object_identifier)
         )
         return self
 
@@ -235,7 +315,9 @@ def attach(gateway, state: FakeGatewayState) -> FakeApp:
 
 def instances_in(parameter_list) -> list[int]:
     """The object instances one RPM call asked about."""
-    return [int(object_id[1]) for object_id, _props in parameter_list]
+    return [
+        _split_identifier(object_id)[1] for object_id, _props in parameter_list
+    ]
 
 
 def expected_instance(ac_number: int, member_key: str) -> int:
