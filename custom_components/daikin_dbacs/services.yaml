@@ -66,3 +66,27 @@ apply_mapping:
       default: false
       selector:
         boolean:
+
+generate_cards:
+  name: Generate device cards
+  description: >-
+    Build a Lovelace card for every live indoor unit, in the shape the
+    HA-Cards `custom:bridge-devices` dashboard strategy consumes. Each card
+    binds from the device, so no entity ids are written out and a point
+    enabled later is picked up without editing a dashboard.
+  fields:
+    area:
+      name: Area
+      description: Only units in this area. Leave empty for all of them.
+      required: false
+      selector:
+        area:
+    faceplate:
+      name: Faceplate
+      description: >-
+        Override the card face for every unit. Left empty, each unit uses
+        whatever its mapping file says, or the full status face.
+      required: false
+      example: fcu-unit
+      selector:
+        text:

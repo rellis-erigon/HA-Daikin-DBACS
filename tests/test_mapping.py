@@ -182,3 +182,79 @@ class TestThePlan:
     def test_an_entry_with_neither_name_nor_area_does_nothing(self):
         result = mapping.plan({0: mapping.UnitMapping(0)}, {0: _Device()})
         assert result.changes == []
+
+
+class TestTheGeneratedCard:
+    """What a bridge hands the dashboard strategy.
+
+    The chain from here to something visible is long — integration, service,
+    strategy, card, faceplate — and a mistake anywhere renders a card that
+    is simply dark. So the shape is asserted here rather than discovered on
+    a dashboard.
+    """
+
+    def test_a_card_binds_from_the_device_alone(self):
+        from custom_components.daikin_dbacs import cards
+
+        card = cards.card_for(device_name="Room A1 ACU A-01")
+        assert card["type"] == "custom:hvac-controller-card"
+        assert card["device"] == "Room A1 ACU A-01"
+        # No entities block: the shared role vocabulary binds a unit from
+        # the device, and sixteen written-out ids would be wrong the moment
+        # somebody enabled a seventeenth point.
+        assert "entities" not in card
+
+    def test_the_full_status_face_is_the_default(self):
+        from custom_components.daikin_dbacs import cards
+
+        assert cards.card_for(device_name="x")["faceplate"] == "indoor-unit"
+
+    def test_a_site_can_choose_the_face(self):
+        from custom_components.daikin_dbacs import cards
+
+        card = cards.card_for(device_name="x", faceplate="fcu-unit")
+        assert card["faceplate"] == "fcu-unit"
+
+    def test_a_thermostat_is_offered_as_well_as_the_device(self):
+        # Both, deliberately: the card prefers a per-role binding and falls
+        # back to the climate entity, so the lamps come from the device's
+        # entities while control comes from the thermostat. Either alone
+        # loses something.
+        from custom_components.daikin_dbacs import cards
+
+        card = cards.card_for(device_name="x", climate_entity="climate.x")
+        assert card["climate"] == "climate.x"
+        assert card["device"] == "x"
+
+    def test_no_thermostat_means_no_climate_key(self):
+        from custom_components.daikin_dbacs import cards
+
+        assert "climate" not in cards.card_for(device_name="x")
+
+    def test_the_strategy_entry_carries_the_area(self):
+        from custom_components.daikin_dbacs import cards
+
+        entry = cards.generated(device_name="x", area_id="l5_accommodation")
+        assert entry["device"] == "x"
+        assert entry["area_id"] == "l5_accommodation"
+        assert entry["card"]["device"] == "x"
+
+    def test_an_unplaced_unit_still_gets_an_entry(self):
+        # A unit nobody has placed yet is still a unit somebody wants to
+        # see, so it appears under "no area" rather than not at all.
+        from custom_components.daikin_dbacs import cards
+
+        entry = cards.generated(device_name="Hall ACU A-C1")
+        assert "area_id" not in entry
+        assert entry["device"] == "Hall ACU A-C1"
+
+    def test_the_title_is_the_device_name(self):
+        from custom_components.daikin_dbacs import cards
+
+        entry = cards.generated(device_name="Room A1 ACU A-01")
+        assert entry["card"]["title"] == "Room A1 ACU A-01"
+
+    def test_a_faceplate_from_the_mapping_file_is_read(self, tmp_path):
+        path = write(tmp_path, {"1 · 1-00": {
+            "name": "Room A1", "faceplate": "fcu-unit"}})
+        assert mapping.load(path)[0].faceplate == "fcu-unit"

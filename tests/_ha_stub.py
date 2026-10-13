@@ -536,6 +536,14 @@ class _EntityRegistry:
         self.entries.append(entry)
         return entry
 
+    def async_get_entity_id(self, domain, platform, unique_id):
+        for entry in self.entries:
+            if entry.unique_id == unique_id and entry.entity_id.startswith(
+                domain + "."
+            ):
+                return entry.entity_id
+        return None
+
     def async_update_entity(self, entity_id, **changes):
         for entry in self.entries:
             if entry.entity_id == entity_id:

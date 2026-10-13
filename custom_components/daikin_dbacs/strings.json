@@ -101,6 +101,20 @@
           "description": "Off by default; a device somebody renamed or placed themselves is left alone."
         }
       }
+    },
+    "generate_cards": {
+      "name": "Generate device cards",
+      "description": "Build a Lovelace card for every live indoor unit, in the shape the HA-Cards bridge-devices dashboard strategy consumes. Each card binds from the device, so no entity ids are written out and a point enabled later is picked up without editing a dashboard.",
+      "fields": {
+        "area": {
+          "name": "Area",
+          "description": "Only units in this area."
+        },
+        "faceplate": {
+          "name": "Faceplate",
+          "description": "Override the card face for every unit."
+        }
+      }
     }
   }
 }

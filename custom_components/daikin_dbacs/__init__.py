@@ -36,8 +36,9 @@ from .const import (
     MODEL,
 )
 from .coordinator import DbacsCoordinator
+from .cards import generated
 from .mapping import DEFAULT_PATH, MappingError, load as load_mapping, plan
-from .objects import SELECTABLE
+from .objects import SELECTABLE, address_label
 from .gateway import DbacsError, DbacsGateway
 
 _LOGGER = logging.getLogger(__name__)
@@ -47,6 +48,7 @@ _LOGGER = logging.getLogger(__name__)
 #: changing the platform list underneath a running entry.
 SERVICE_RELEASE_CONTROL = "release_control"
 SERVICE_APPLY_MAPPING = "apply_mapping"
+SERVICE_GENERATE_CARDS = "generate_cards"
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
@@ -226,6 +228,62 @@ def _register_services(hass: HomeAssistant) -> None:
         DOMAIN,
         SERVICE_APPLY_MAPPING,
         apply_mapping,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+
+    async def generate_cards(call) -> dict[str, Any]:
+        """A card for every live group, for the bridge-devices strategy.
+
+        Returns the shape that strategy consumes — cards keyed by device and
+        area — plus whatever was skipped and why, because a unit missing
+        from a dashboard with no explanation is worse than one that says it
+        has no entities yet.
+        """
+        wanted_area = call.data.get("area")
+        devices = dr.async_get(hass)
+        entities = er.async_get(hass)
+
+        cards: list[dict[str, Any]] = []
+        skipped: list[str] = []
+
+        for entry in hass.config_entries.async_entries(DOMAIN):
+            coordinator = getattr(entry, "runtime_data", None)
+            if coordinator is None:
+                continue
+            for ac_number in coordinator.active_groups:
+                device = devices.async_get_device(
+                    identifiers={(DOMAIN, f"{entry.entry_id}_{ac_number}")}
+                )
+                if device is None:
+                    skipped.append(f"{address_label(ac_number)} has no device")
+                    continue
+                if wanted_area and device.area_id != wanted_area:
+                    continue
+
+                name = device.name_by_user or device.name
+                if not name:
+                    skipped.append(f"{address_label(ac_number)} has no name")
+                    continue
+
+                climate_entity = entities.async_get_entity_id(
+                    "climate", DOMAIN, f"{entry.entry_id}_{ac_number}_climate"
+                )
+                cards.append(
+                    generated(
+                        device_name=name,
+                        area_id=device.area_id,
+                        faceplate=call.data.get("faceplate"),
+                        climate_entity=climate_entity,
+                    )
+                )
+
+        _LOGGER.debug("generate_cards produced %d card(s)", len(cards))
+        return {"cards": cards, "skipped": skipped}
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_GENERATE_CARDS,
+        generate_cards,
         supports_response=SupportsResponse.OPTIONAL,
     )
 

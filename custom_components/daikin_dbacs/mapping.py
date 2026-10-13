@@ -56,6 +56,9 @@ class UnitMapping:
     model: str | None = None
     system: str | None = None
     outdoor: str | None = None
+    faceplate: str | None = None
+    """Which card face this unit is drawn with, where a site has a
+    preference. Left out, the generated card uses the default."""
 
     @property
     def label(self) -> str:
@@ -151,6 +154,7 @@ def load(path: str | None = None) -> dict[int, UnitMapping]:
             model=_text(value.get("model")),
             system=_text(value.get("system")),
             outdoor=_text(value.get("outdoor")),
+            faceplate=_text(value.get("faceplate")),
         )
     if not out:
         raise MappingError(f"{target} held no usable entries")
