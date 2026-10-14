@@ -66,6 +66,13 @@ class FakeGatewayState:
     """The synthetic gateway's contents and behaviour."""
 
     device_instance: int = 2001
+    #: Members no group publishes, whatever else is set. Real gateways omit
+    #: some: both on this site predate the ventilation members 32-35, so
+    #: they publish 28 or 30 of the 34 modelled.
+    omit_members: frozenset[int] = frozenset()
+    #: False makes the device object answer nothing, as a gateway does when
+    #: asked at an instance it is not using.
+    device_object_readable: bool = True
     #: Groups the gateway publishes objects for. Everything else answers
     #: unknown-object, which is how a real gateway says "nothing is wired
     #: there".
@@ -127,6 +134,8 @@ class FakeGatewayState:
     def published(self, ac_number: int, member_number: int) -> bool:
         """Whether this group publishes this member."""
         if ac_number not in self.populated:
+            return False
+        if member_number in self.omit_members:
             return False
         if self.members is None:
             return member_number in MEMBERS
@@ -279,6 +288,8 @@ class FakeApp:
         return results
 
     def _device_property(self, name: str) -> Any:
+        if not self.state.device_object_readable:
+            return FakeError("object", "unknown-object")
         values = {
             "object-name": "D-BACS-TEST",
             "vendor-name": "Daikin Industries",
@@ -364,7 +375,11 @@ def attach(gateway, state: FakeGatewayState) -> FakeApp:
     app = FakeApp(state)
     gateway._app = app  # noqa: SLF001 - the seam the fake exists to use
     gateway._address = "fake"  # noqa: SLF001
-    gateway.device_instance = state.device_instance
+    # Only fill in the instance when the caller passed none at all. `is
+    # None`, not falsy: a test about an instance of 0 needs its 0 kept,
+    # and conflating the two is the bug this fake has to be able to show.
+    if gateway.device_instance is None:
+        gateway.device_instance = state.device_instance
     return app
 
 

@@ -103,3 +103,32 @@ generate_cards:
       example: fcu-unit
       selector:
         text:
+
+purge_orphans:
+  name: Remove orphaned entities
+  description: >-
+    Remove entities for points the gateway does not publish. These collect
+    when a gateway is first set up before its Object_List can be read:
+    discovery falls back to probing, which finds the units but not which
+    members each one publishes, so an entity is made for every member this
+    integration models. On a gateway whose firmware predates the
+    ventilation members that is two entities per group which can never
+    read. Reports what it would remove by default.
+  fields:
+    dry_run:
+      name: Dry run
+      description: >-
+        List the orphans without removing them. On by default.
+      required: false
+      default: true
+      selector:
+        boolean:
+    host:
+      name: Gateway
+      description: >-
+        Act on one gateway only, by its address. Leave empty for all of
+        them.
+      required: false
+      example: 192.0.2.10
+      selector:
+        text:

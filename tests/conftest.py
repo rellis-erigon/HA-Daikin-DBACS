@@ -20,6 +20,19 @@ from custom_components.daikin_dbacs import mapping  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
+def _fresh_registries():
+    """Give every test empty registries.
+
+    The stand-ins are keyed on `id(hass)` and CPython reuses ids, so one
+    test could otherwise see another's devices. This surfaced as a test
+    that passed alone and failed in a full run.
+    """
+    _ha_stub.reset_registries()
+    yield
+    _ha_stub.reset_registries()
+
+
+@pytest.fixture(autouse=True)
 def _no_real_site_data(tmp_path, monkeypatch):
     """Keep every test away from the live site mapping files.
 

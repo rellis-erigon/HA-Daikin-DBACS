@@ -240,9 +240,16 @@ class DbacsGateway:
         return await self._identify()
 
     async def _identify(self) -> GatewayInfo:
-        """Learn the gateway's device instance, then read its device object."""
+        """Learn the gateway's device instance, then read its device object.
+
+        `0` counts as not given. BACnet permits instance 0, but no D-BACS
+        gateway uses it and the optional number box in the config flow
+        submits 0 for an empty field — so honouring it means recording a
+        gateway that was never read. That is exactly what happened when the
+        second gateway was added.
+        """
         instance = self.device_instance
-        if instance is None:
+        if not instance:
             instance = await self._who_is()
         self.device_instance = instance
 
@@ -262,6 +269,21 @@ class DbacsGateway:
         values: dict[str, Any] = {}
         for name, value in await self._read_properties(device_id, wanted):
             values[name] = value
+
+        # Object_Name is a required property of a BACnet device object, so
+        # not getting it means nothing answered at this instance. Returning
+        # an empty record instead of raising is what let a half-configured
+        # gateway look like a working one: discovery still finds every unit
+        # by probing, while the mapping file — named after the instance —
+        # silently does not exist, so nothing is named, placed, or rolled up
+        # into an outdoor unit.
+        if _text(values.get("object-name")) is None:
+            raise DbacsProtocolError(
+                f"{self.host} did not answer as a BACnet device at instance "
+                f"{instance}. Check the device instance — it is set with "
+                "Daikin's configurator, and leaving the field empty lets it "
+                "be discovered."
+            )
 
         return GatewayInfo(
             device_instance=instance,

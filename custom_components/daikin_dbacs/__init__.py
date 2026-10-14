@@ -39,7 +39,7 @@ from .coordinator import DbacsCoordinator
 from .cards import generated
 from .systems import systems_from_mapping
 from .mapping import MappingError, load as load_mapping, path_for, plan
-from .objects import SELECTABLE, address_label
+from .objects import MEMBERS_BY_KEY, SELECTABLE, address_label
 from .gateway import DbacsError, DbacsGateway
 
 _LOGGER = logging.getLogger(__name__)
@@ -50,6 +50,7 @@ _LOGGER = logging.getLogger(__name__)
 SERVICE_RELEASE_CONTROL = "release_control"
 SERVICE_APPLY_MAPPING = "apply_mapping"
 SERVICE_GENERATE_CARDS = "generate_cards"
+SERVICE_PURGE_ORPHANS = "purge_orphans"
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
@@ -61,6 +62,32 @@ PLATFORMS: list[Platform] = [
 ]
 
 type DbacsConfigEntry = ConfigEntry[DbacsCoordinator]
+
+
+def _group_devices(registry, entry) -> dict[int, Any]:
+    """This entry's indoor-unit devices, keyed by DIII AC number.
+
+    Built from the registry's own list for the config entry rather than
+    looked up one identifier at a time. `DeviceRegistry` has no public
+    single-identifier lookup, and calling one that does not exist returned
+    nothing for every group without raising — which left `apply_mapping`
+    reporting no matches and `generate_cards` skipping all 223 units with
+    "has no device". The test stub implemented the invented method, so the
+    suite could not see it.
+
+    Only the group devices come back: the gateway's own device has no
+    numeric suffix, and the outdoor units' identifiers end in a system name.
+    """
+    prefix = f"{entry.entry_id}_"
+    found: dict[int, Any] = {}
+    for device in dr.async_entries_for_config_entry(registry, entry.entry_id):
+        for domain, identifier in device.identifiers:
+            if domain != DOMAIN or not identifier.startswith(prefix):
+                continue
+            tail = identifier[len(prefix):]
+            if tail.isdigit():
+                found[int(tail)] = device
+    return found
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: DbacsConfigEntry) -> bool:
@@ -78,6 +105,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: DbacsConfigEntry) -> boo
         info = await gateway.connect()
     except DbacsError as err:
         raise ConfigEntryNotReady(str(err)) from err
+
+    # Record the instance the gateway actually reported, if the entry has a
+    # different one or none. The mapping file is named after it, so an entry
+    # written before this was checked — the second gateway here recorded 0 —
+    # repairs itself on the next reload instead of needing to be re-added
+    # and losing anything set by hand.
+    if entry.data.get(CONF_DEVICE_INSTANCE) != info.device_instance:
+        _LOGGER.info(
+            "%s reports BACnet device instance %s; the entry said %s, so "
+            "recording the gateway's own answer",
+            entry.data[CONF_HOST],
+            info.device_instance,
+            entry.data.get(CONF_DEVICE_INSTANCE),
+        )
+        hass.config_entries.async_update_entry(
+            entry,
+            data={**entry.data, CONF_DEVICE_INSTANCE: info.device_instance},
+        )
 
     coordinator = DbacsCoordinator(hass, entry, gateway, info)
 
@@ -113,7 +158,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: DbacsConfigEntry) -> boo
     # The gateway cannot: its only outdoor information is a compressor flag
     # on each indoor unit.
     try:
-        site_path = path_for(entry.data.get(CONF_DEVICE_INSTANCE))
+        site_path = path_for(info.device_instance)
         site = await hass.async_add_executor_job(load_mapping, site_path)
     except MappingError as err:
         _LOGGER.debug("no site mapping, so no outdoor units: %s", err)
@@ -210,13 +255,12 @@ def _register_services(hass: HomeAssistant) -> None:
             except MappingError as err:
                 raise HomeAssistantError(f"{entry.title}: {err}") from err
 
-            live: dict[int, Any] = {}
-            for ac_number in coordinator.active_groups:
-                device = devices.async_get_device_by_identifier(
-                    DOMAIN, f"{entry.entry_id}_{ac_number}"
-                )
-                if device is not None:
-                    live[ac_number] = device
+            known = _group_devices(devices, entry)
+            live: dict[int, Any] = {
+                ac_number: known[ac_number]
+                for ac_number in coordinator.active_groups
+                if ac_number in known
+            }
 
             outcome = plan(
                 mapping,
@@ -288,10 +332,9 @@ def _register_services(hass: HomeAssistant) -> None:
             coordinator = getattr(entry, "runtime_data", None)
             if coordinator is None:
                 continue
+            known = _group_devices(devices, entry)
             for ac_number in coordinator.active_groups:
-                device = devices.async_get_device_by_identifier(
-                    DOMAIN, f"{entry.entry_id}_{ac_number}"
-                )
+                device = known.get(ac_number)
                 if device is None:
                     skipped.append(f"{address_label(ac_number)} has no device")
                     continue
@@ -334,6 +377,87 @@ def _register_services(hass: HomeAssistant) -> None:
         supports_response=SupportsResponse.OPTIONAL,
     )
 
+
+    async def purge_orphans(call) -> dict[str, Any]:
+        """Remove entities for points the gateway does not publish.
+
+        These collect when a gateway is first set up without its member
+        map: discovery falls back to probing, which finds the units but not
+        which members each publishes, so an entity is made for every member
+        this integration models. On a gateway whose firmware predates the
+        ventilation members that is two dead entities per group, and they
+        can never read anything.
+
+        Once the member map is known they are not created at all, so this
+        is only for what is already in the registry. Reports by default.
+
+        Deliberately narrow. An entity is an orphan only when its point
+        belongs to a group the gateway does not have, or to a member that
+        group does not publish. A point that is published but switched off
+        in the options is not an orphan — that is a choice, not a fault —
+        and anything whose unique id is not a member point, such as the
+        climate entity, the fault event or an outdoor unit, is left alone.
+        """
+        dry_run = call.data.get("dry_run", True)
+        wanted_host = call.data.get("host")
+        registry = er.async_get(hass)
+
+        orphans: list[str] = []
+        for entry in hass.config_entries.async_entries(DOMAIN):
+            coordinator = getattr(entry, "runtime_data", None)
+            if coordinator is None:
+                continue
+            if wanted_host and entry.data.get(CONF_HOST) != wanted_host:
+                continue
+
+            prefix = f"{entry.entry_id}_"
+            live = set(coordinator.active_groups)
+            for registered in list(
+                er.async_entries_for_config_entry(registry, entry.entry_id)
+            ):
+                unique_id = registered.unique_id or ""
+                if not unique_id.startswith(prefix):
+                    continue
+                tail = unique_id[len(prefix):]
+                ac_text, _, key = tail.partition("_")
+                if not ac_text.isdigit() or key not in MEMBERS_BY_KEY:
+                    # Not a member point: the climate entity, the fault
+                    # event, an outdoor unit. Nothing to judge.
+                    continue
+                ac_number = int(ac_text)
+                group = coordinator.discovery.groups.get(ac_number)
+                if ac_number in live and group is not None and group.publishes(
+                    MEMBERS_BY_KEY[key].number
+                ):
+                    continue
+                orphans.append(registered.entity_id)
+
+        removed = 0
+        if not dry_run:
+            for entity_id in orphans:
+                registry.async_remove(entity_id)
+                removed += 1
+            if removed:
+                _LOGGER.info(
+                    "purge_orphans removed %d entit%s for points the "
+                    "gateway does not publish",
+                    removed,
+                    "y" if removed == 1 else "ies",
+                )
+
+        return {
+            "orphans": orphans,
+            "count": len(orphans),
+            "removed": removed,
+            "dry_run": bool(dry_run),
+        }
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_PURGE_ORPHANS,
+        purge_orphans,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
 
 def _entry_and_group_of(device) -> tuple[str, int] | None:
     """The config entry and AC number a device belongs to."""

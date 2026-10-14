@@ -123,6 +123,12 @@ class _ConfigEntries:
     async def async_reload(self, entry_id: str) -> None:
         self.reloaded.append(entry_id)
 
+    def async_update_entry(self, entry, **changes) -> bool:
+        """Replace fields on an entry, as Home Assistant's own does."""
+        for field, value in changes.items():
+            setattr(entry, field, value)
+        return True
+
     async def async_forward_entry_setups(self, entry, platforms) -> None:
         self.forwarded.append((entry, tuple(platforms)))
 
@@ -138,10 +144,14 @@ class ConfigEntry:
         data: dict | None = None,
         options: dict | None = None,
         entry_id: str = "test_entry",
+        title: str = "D-BACS test gateway",
     ) -> None:
         self.data = data or {}
         self.options = options or {}
         self.entry_id = entry_id
+        # Real entries have a title, and the services put it in their
+        # report and their error messages.
+        self.title = title
         self.runtime_data = None
         self._unload_callbacks: list = []
         self.background_tasks: list = []
@@ -436,11 +446,16 @@ class UnitOfEnergy(StrEnum):
 
 
 class _DeviceEntry:
-    def __init__(self, identifiers, device_id="hub_device_id") -> None:
+    def __init__(self, identifiers, device_id="hub_device_id",
+                 config_entries=None) -> None:
         self.id = device_id
         self.identifiers = identifiers
+        self.name = None
         self.name_by_user = None
         self.area_id = None
+        # Real DeviceEntry carries the entries that own it, and
+        # async_entries_for_config_entry filters on exactly this.
+        self.config_entries = set(config_entries or ())
 
 
 class _DeviceRegistry:
@@ -452,24 +467,24 @@ class _DeviceRegistry:
         self.updated: list = []
 
     def async_get_or_create(self, **kwargs):
-        entry = _DeviceEntry(kwargs.get("identifiers"))
+        entry = _DeviceEntry(
+            kwargs.get("identifiers"),
+            config_entries=[kwargs["config_entry_id"]]
+            if kwargs.get("config_entry_id") else (),
+        )
         self.created.append(kwargs)
+        self.devices[entry.id] = entry
         return entry
 
-    def add_device(self, device_id, identifiers):
-        self.devices[device_id] = _DeviceEntry(identifiers)
+    def add_device(self, device_id, identifiers, config_entry_id=None):
+        self.devices[device_id] = _DeviceEntry(
+            identifiers, device_id,
+            config_entries=[config_entry_id] if config_entry_id else (),
+        )
         return self.devices[device_id]
 
     def async_get(self, device_id):
         return self.devices.get(device_id)
-
-    def async_get_device_by_identifier(self, domain, identifier):
-        """Replaces async_get_device, which Home Assistant deprecated
-        because identifiers are no longer unique across config entries."""
-        for device in self.devices.values():
-            if (domain, identifier) in set(device.identifiers or ()):
-                return device
-        return None
 
     def async_update_device(self, device_id, **changes):
         device = self.devices.get(device_id)
@@ -536,6 +551,11 @@ class _EntityRegistry:
     def __init__(self) -> None:
         self.entries: list = []
         self.updates: list = []
+        self.removed: list = []
+
+    def async_remove(self, entity_id) -> None:
+        self.entries = [e for e in self.entries if e.entity_id != entity_id]
+        self.removed.append(entity_id)
 
     def add(self, entity_id, unique_id, disabled_by=None) -> _RegistryEntry:
         entry = _RegistryEntry(entity_id, unique_id, disabled_by)
@@ -563,11 +583,34 @@ class _EntityRegistry:
 _ENTITY_REGISTRIES: dict = {}
 
 
+def reset_registries() -> None:
+    """Forget every stand-in registry.
+
+    They are keyed on `id(hass)`, and CPython reuses an id once the object
+    it belonged to is collected — so without this a test can be handed the
+    previous test's devices and entities. It only bites in a full run,
+    which is the worst way to find out.
+    """
+    _REGISTRIES.clear()
+    _AREA_REGISTRIES.clear()
+    _ENTITY_REGISTRIES.clear()
+
+
 def _entity_registry(hass):
     return _ENTITY_REGISTRIES.setdefault(id(hass), _EntityRegistry())
 
 
-def _entries_for_config_entry(registry, _entry_id):
+def _entries_for_config_entry(registry, entry_id):
+    """Entities or devices belonging to one config entry.
+
+    Home Assistant has one of these per registry. The device version must
+    filter on `config_entries`, because an integration with two gateways
+    asks for each entry's devices separately and getting them all back
+    would make a wrong entry_id look right.
+    """
+    if hasattr(registry, "devices"):
+        return [device for device in registry.devices.values()
+                if entry_id in getattr(device, "config_entries", ())]
     return list(registry.entries)
 
 
@@ -677,6 +720,7 @@ def install() -> None:
         "homeassistant.helpers.device_registry",
         DeviceInfo=dict,
         async_get=_device_registry,
+        async_entries_for_config_entry=_entries_for_config_entry,
     )
     _module(
         "homeassistant.helpers.entity_platform",
