@@ -90,15 +90,82 @@ def _group_devices(registry, entry) -> dict[int, Any]:
     return found
 
 
+#: BACnet reserves 4194303 for a device that has not been given an instance.
+WILDCARD_INSTANCE = 4194303
+
+
+def _local_identity(hass: HomeAssistant, entry) -> tuple[int, int]:
+    """The UDP port and BACnet device instance this entry should use locally.
+
+    One gateway can keep the defaults. A second cannot share them: two
+    bacpypes3 applications bound to the same port in one process means
+    replies go to whichever socket the operating system hands them to, and
+    two local devices claiming one instance number is a protocol violation
+    besides. On this site the result was gateway 11 receiving everything
+    while all 2,016 of gateway 12's points timed out — with the config entry
+    still reporting `loaded`, so the only symptom was half the estate
+    reading `unavailable`.
+
+    Uniqueness is enforced rather than merely defaulted. The config flow
+    writes both values into every entry, so there is no way to tell a
+    deliberate 47808 from an accepted default — and a deliberate collision
+    cannot work either. Entries earlier in the list keep what they have and
+    any later one that clashes is moved, which is stable across restarts
+    because the order is creation order and the result is written back.
+    """
+    others = [
+        other for other in hass.config_entries.async_entries(DOMAIN)
+        if other.entry_id != entry.entry_id
+    ]
+    position = {
+        e.entry_id: i
+        for i, e in enumerate(hass.config_entries.async_entries(DOMAIN))
+    }
+    mine = position.get(entry.entry_id, len(position))
+    earlier = [o for o in others if position.get(o.entry_id, -1) < mine]
+
+    taken_ports = {
+        int(o.data.get(CONF_LOCAL_PORT, DEFAULT_LOCAL_PORT)) for o in earlier
+    }
+    taken_instances = {
+        int(o.data.get(CONF_OUR_INSTANCE, DEFAULT_OUR_INSTANCE))
+        for o in earlier
+    }
+
+    port = int(entry.data.get(CONF_LOCAL_PORT, DEFAULT_LOCAL_PORT))
+    while port in taken_ports:
+        port += 1
+
+    instance = int(entry.data.get(CONF_OUR_INSTANCE, DEFAULT_OUR_INSTANCE))
+    while instance in taken_instances or instance >= WILDCARD_INSTANCE:
+        instance -= 1
+
+    return port, instance
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: DbacsConfigEntry) -> bool:
     """Connect to one gateway, discover its groups and start sweeping."""
+    local_port, our_instance = _local_identity(hass, entry)
+    if (entry.data.get(CONF_LOCAL_PORT) != local_port
+            or entry.data.get(CONF_OUR_INSTANCE) != our_instance):
+        _LOGGER.info(
+            "%s will use local port %s and BACnet instance %s, so that it "
+            "does not share a socket or an identity with another gateway",
+            entry.data[CONF_HOST], local_port, our_instance,
+        )
+        hass.config_entries.async_update_entry(
+            entry,
+            data={**entry.data, CONF_LOCAL_PORT: local_port,
+                  CONF_OUR_INSTANCE: our_instance},
+        )
+
     gateway = DbacsGateway(
         entry.data[CONF_HOST],
         entry.data.get(CONF_PORT, DEFAULT_PORT),
         device_instance=entry.data.get(CONF_DEVICE_INSTANCE),
         local_address=entry.data.get(CONF_LOCAL_ADDRESS),
-        local_port=entry.data.get(CONF_LOCAL_PORT, DEFAULT_LOCAL_PORT),
-        our_instance=entry.data.get(CONF_OUR_INSTANCE, DEFAULT_OUR_INSTANCE),
+        local_port=local_port,
+        our_instance=our_instance,
     )
 
     try:
