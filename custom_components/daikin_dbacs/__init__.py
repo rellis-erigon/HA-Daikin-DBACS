@@ -11,6 +11,8 @@ building is a separate piece of work with its own review — see PRD.md.
 from __future__ import annotations
 
 import logging
+import time
+from contextlib import suppress
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -39,7 +41,14 @@ from .coordinator import DbacsCoordinator
 from .cards import generated
 from .systems import systems_from_mapping
 from .mapping import MappingError, load as load_mapping, path_for, plan
-from .objects import MEMBERS_BY_KEY, SELECTABLE, address_label
+from .objects import (
+    MEMBERS,
+    MEMBERS_BY_KEY,
+    PROBE_MEMBER,
+    SELECTABLE,
+    PointRef,
+    address_label,
+)
 from .gateway import DbacsError, DbacsGateway
 
 _LOGGER = logging.getLogger(__name__)
@@ -51,6 +60,7 @@ SERVICE_RELEASE_CONTROL = "release_control"
 SERVICE_APPLY_MAPPING = "apply_mapping"
 SERVICE_GENERATE_CARDS = "generate_cards"
 SERVICE_PURGE_ORPHANS = "purge_orphans"
+SERVICE_SELF_TEST = "self_test"
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
@@ -92,6 +102,36 @@ def _group_devices(registry, entry) -> dict[int, Any]:
 
 #: BACnet reserves 4194303 for a device that has not been given an instance.
 WILDCARD_INSTANCE = 4194303
+
+
+async def _try_reads(gateway, coordinator, batches) -> dict[str, Any]:
+    """Read increasing batches of points, reporting what answered."""
+    member = MEMBERS[PROBE_MEMBER]
+    groups = list(coordinator.active_groups)
+    requested = answered = 0
+    timings: dict[str, Any] = {}
+    for size in batches:
+        points = [PointRef(ac, member) for ac in groups[:size]]
+        if not points:
+            continue
+        started = time.monotonic()
+        try:
+            readings = await gateway.read_points(points)
+        except DbacsError as err:
+            timings[str(size)] = f"failed: {err}"
+            requested += len(points)
+            continue
+        good = sum(1 for r in readings.values() if r and r.ok)
+        requested += len(points)
+        answered += good
+        timings[str(size)] = (
+            f"{good}/{len(points)} in {time.monotonic() - started:.1f}s"
+        )
+    return {
+        "requested": requested,
+        "answered": answered,
+        "seconds": timings,
+    }
 
 
 def _local_identity(hass: HomeAssistant, entry) -> tuple[int, int]:
@@ -523,6 +563,103 @@ def _register_services(hass: HomeAssistant) -> None:
         DOMAIN,
         SERVICE_PURGE_ORPHANS,
         purge_orphans,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+
+    async def self_test(call) -> dict[str, Any]:
+        """Say whether a silent gateway is the gateway's fault or ours.
+
+        The live connection is tried first: the device object, then batches
+        of 1, 4, 16 and 64 points. If it answers, that is the end of it.
+
+        If it does not, a second connection is opened on a spare local port
+        and the same reads are tried again. That comparison is the whole
+        diagnosis — when this happened for real, a fresh connection read the
+        gateway in 0.6 seconds and 58 of 64 points while the integration
+        could not read one, which ruled out the gateway, the network and the
+        APDU size together. Doing it here means nobody needs a shell on the
+        container to find that out.
+
+        Reads only. Nothing is written and no subscription is made.
+        """
+        wanted_host = call.data.get("host")
+        batches = call.data.get("batches") or [1, 4, 16, 64]
+        report: dict[str, Any] = {"gateways": []}
+
+        for entry in hass.config_entries.async_entries(DOMAIN):
+            coordinator = getattr(entry, "runtime_data", None)
+            if coordinator is None:
+                continue
+            host = entry.data.get(CONF_HOST)
+            if wanted_host and host != wanted_host:
+                continue
+
+            live = await _try_reads(coordinator.gateway, coordinator, batches)
+            result: dict[str, Any] = {"host": host, "live": live}
+
+            if live["answered"]:
+                result["verdict"] = "working"
+                result["advice"] = (
+                    f"{host} answered {live['answered']} of "
+                    f"{live['requested']} points."
+                )
+            else:
+                fresh_gateway = DbacsGateway(
+                    host,
+                    entry.data.get(CONF_PORT, DEFAULT_PORT),
+                    device_instance=entry.data.get(CONF_DEVICE_INSTANCE),
+                    local_address=entry.data.get(CONF_LOCAL_ADDRESS),
+                    # A port of 0 lets the operating system pick a free one,
+                    # so this never collides with a gateway that is loaded.
+                    local_port=0,
+                    our_instance=WILDCARD_INSTANCE - 1,
+                )
+                try:
+                    await fresh_gateway.connect()
+                except DbacsError as err:
+                    fresh = {"requested": 0, "answered": 0,
+                             "error": str(err)}
+                else:
+                    fresh = await _try_reads(fresh_gateway, coordinator,
+                                             batches)
+                finally:
+                    with suppress(Exception):
+                        await fresh_gateway.close()
+
+                result["fresh"] = fresh
+                if fresh["answered"]:
+                    result["verdict"] = "our end"
+                    result["advice"] = (
+                        f"{host} answered a new connection but not the one "
+                        "Home Assistant holds, so the gateway is fine and "
+                        "this end needs a new socket. Reload the entry; the "
+                        "sweep also does this by itself after "
+                        f"{DbacsCoordinator.DEAD_SWEEPS_BEFORE_RECONNECT} "
+                        "silent sweeps."
+                    )
+                else:
+                    result["verdict"] = "the gateway"
+                    result["advice"] = (
+                        f"{host} did not answer a new connection either, so "
+                        "the gateway or the network between is at fault "
+                        "rather than Home Assistant."
+                    )
+
+            _LOGGER.info("self_test on %s: %s — %s", host,
+                         result["verdict"], result["advice"])
+            report["gateways"].append(result)
+
+        if not report["gateways"]:
+            raise HomeAssistantError(
+                f"no configured gateway at {wanted_host}" if wanted_host
+                else "no gateway is set up"
+            )
+        return report
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SELF_TEST,
+        self_test,
         supports_response=SupportsResponse.OPTIONAL,
     )
 

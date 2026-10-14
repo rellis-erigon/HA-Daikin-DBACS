@@ -149,6 +149,7 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         a mapping there are no systems — which is the honest outcome rather
         than a guess."""
         self.hub_device_id: str | None = None
+        self._dead_sweeps = 0
         """The registry id of the gateway's own device, set at setup."""
         self._restart_token = info.restart_token
         self._cov_points: dict[str, PointRef] = {}
@@ -377,6 +378,11 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
 
     # --- the sweep -----------------------------------------------------------
 
+    #: Sweeps in which nothing at all answered before the BACnet
+    #: application is rebuilt. More than one, so a single bad sweep is not
+    #: treated as a wedged socket; few enough that recovery is minutes.
+    DEAD_SWEEPS_BEFORE_RECONNECT = 3
+
     async def _async_update_data(self) -> dict[str, PointValue]:
         if not self.gateway.connected:
             raise UpdateFailed(f"{self.gateway.host} is not connected")
@@ -395,6 +401,33 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
             ) from err
         except DbacsError as err:
             raise UpdateFailed(str(err)) from err
+
+        # A per-point failure is returned, not raised, because one dead unit
+        # among ninety-six must not fail the sweep. But if *nothing*
+        # answered, the sweep has not succeeded in any useful sense, and
+        # treating it as success is what let a gateway sit unavailable for
+        # two hours behind a config entry still reporting `loaded`, with
+        # nothing in the log.
+        if not any(reading.ok for reading in readings.values()):
+            self._dead_sweeps += 1
+            if self._dead_sweeps >= self.DEAD_SWEEPS_BEFORE_RECONNECT:
+                self._dead_sweeps = 0
+                try:
+                    await self.gateway.reconnect()
+                except DbacsError as err:
+                    _LOGGER.warning(
+                        "%s: reconnecting did not help: %s",
+                        self.gateway.host, err,
+                    )
+                else:
+                    await self.async_setup_cov()
+            raise UpdateFailed(
+                f"{self.gateway.host}: none of {len(points)} points "
+                f"answered ({self._dead_sweeps} sweep(s) in a row). The "
+                "gateway may be unreachable, or this end may need a new "
+                "socket."
+            )
+        self._dead_sweeps = 0
 
         # Keep whatever change-of-value has told us since the sweep started,
         # rather than letting an older reading overwrite a newer one.

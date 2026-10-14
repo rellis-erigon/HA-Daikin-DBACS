@@ -229,6 +229,21 @@ class DbacsGateway:
             self._app = None
         self._address = None
 
+    async def reconnect(self) -> GatewayInfo:
+        """Throw away the BACnet application and build a fresh one.
+
+        For when the gateway answers a new connection perfectly but this
+        one has stopped hearing anything — a wedged socket. Nothing short of
+        a new application recovers it, and the old one must go first so the
+        local port is released.
+        """
+        _LOGGER.warning(
+            "%s: replacing the BACnet application after repeated silence",
+            self.host,
+        )
+        await self.close()
+        return await self.connect()
+
     @property
     def connected(self) -> bool:
         return self._app is not None

@@ -132,3 +132,33 @@ purge_orphans:
       example: 192.0.2.10
       selector:
         text:
+
+self_test:
+  name: Test the connection
+  description: >-
+    Say whether a gateway that has gone quiet is the gateway's fault or
+    Home Assistant's. Reads the device object and then batches of points on
+    the live connection; if that answers, it stops there. If it does not, a
+    second connection is opened on a spare port and the same reads are
+    tried again — a gateway that answers a new connection but not the
+    existing one has a wedged socket at this end, not a fault of its own.
+    Reads only: nothing is written and no subscription is made.
+  fields:
+    host:
+      name: Gateway
+      description: >-
+        Test one gateway only, by its address. Leave empty for all of them.
+      required: false
+      example: 192.0.2.10
+      selector:
+        text:
+    batches:
+      name: Batch sizes
+      description: >-
+        How many points to ask for at a time. The default climbs 1, 4, 16,
+        64, which is enough to show a gateway that answers small reads and
+        chokes on large ones.
+      required: false
+      example: "[1, 4, 16, 64]"
+      selector:
+        object:

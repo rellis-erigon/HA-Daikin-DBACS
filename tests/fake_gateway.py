@@ -100,6 +100,15 @@ class FakeGatewayState:
     #: Objects the integration does not model, as (type, instance) pairs.
     #: Member 18 is real, Japanese-market-only, and turns up in the wild.
     extra_objects: list[tuple[str, int]] = field(default_factory=list)
+    #: Every point answers with an error while the device object still
+    #: reads. This is what a wedged socket looks like from the integration's
+    #: side: identity fine, all 2,016 points timing out, and because the
+    #: errors are *returned* rather than raised the sweep looks successful.
+    points_time_out: bool = False
+    #: Applications whose point reads time out, by id(). Models the real
+    #: shape of the fault: one wedged socket, while a connection opened
+    #: alongside it reads the same gateway perfectly.
+    wedged_apps: set[int] = field(default_factory=set)
     #: Object instances that should answer with an error instead of a value.
     broken: set[int] = field(default_factory=set)
     #: How many subscriptions to accept before refusing, as the gateway does
@@ -306,6 +315,8 @@ class FakeApp:
         return values.get(name)
 
     def _value(self, _type_name: str, instance: int) -> Any:
+        if self.state.points_time_out or id(self) in self.state.wedged_apps:
+            return FakeError("property", "timeout")
         if instance in self.state.broken:
             return FakeError("property", "write-access-denied")
         ac_number, member_number = split_instance(instance)
