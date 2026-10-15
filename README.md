@@ -99,9 +99,19 @@ them where the gateway publishes all eighteen:
 | Fault | an `event` entity, so history shows *when* a unit faulted |
 
 The two accumulators — accumulated power and accumulated gas — are available
-but off by default, because they are model-dependent and read zero on units
-that do not support them, which looks like a broken meter rather than an
-absent one.
+but off by default, because per-unit metering is a separately licensed
+option. Where it is not fitted, the gateway still publishes both objects and
+holds them at zero forever, which looks like a broken meter rather than an
+absent one. Enabling them then buys two long-term-statistics series per
+indoor unit that record nothing.
+
+A zero does not by itself prove the option is missing, since a fitted meter
+also reads zero until something is consumed. Read the rest of the
+Accumulator before deciding: an unfitted one still answers with a plausible
+name, the right engineering units, `no-fault-detected`, `out-of-service` 0
+and empty status flags, so only a unit that has demonstrably been running
+with a flat total tells you the meters are not wired. Gas total is only
+meaningful behind gas-engine outdoor plant.
 
 With control on, each group also gets a `climate` entity carrying mode,
 action, both temperatures, fan speed and swing, a filter-reset `button`, and
