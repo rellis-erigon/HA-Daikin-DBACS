@@ -85,3 +85,23 @@ def test_auto_is_confirmed_by_the_mode_it_chose():
     assert not matches("on_off_command", "inactive", 1)
     assert matches("setpoint", 22.5, 22.5)
     assert not matches("setpoint", 22.5, 22.0)
+
+
+def test_the_unit_says_where_it_lives_on_the_gateway():
+    """Enough on the climate entity to check its mapping by hand."""
+    _coordinator, _state, _hass, unit = unit_one()
+    attributes = unit.extra_state_attributes
+    assert attributes["ac_number"] == 1
+    assert attributes["gateway_host"] == "192.0.2.10"
+    assert attributes["gateway_device_instance"] is not None
+    objects = {o["object"]: o for o in attributes["bacnet_objects"]}
+    assert objects["AirConModeCommand_001"] == {
+        "point": MEMBERS_BY_KEY["mode_command"].label,
+        "object": "AirConModeCommand_001",
+        "type": "multi-state-output",
+        "instance": 256 + 5,
+        "kind": "command",
+    }
+    assert objects["StartStopStatus_001"]["kind"] == "status"
+    # Fixed facts stay out of the recorder.
+    assert "bacnet_objects" in unit._unrecorded_attributes

@@ -29,7 +29,7 @@ from . import DbacsConfigEntry
 from .capacity import capacity_of
 from .const import DEFAULT_MAX_TEMP, DEFAULT_MIN_TEMP, TEMP_STEP
 from .entity import DbacsEntity
-from .objects import MEMBERS_BY_KEY, PointRef, is_binary_active
+from .objects import MEMBERS, MEMBERS_BY_KEY, PointRef, is_binary_active
 from .writes import WriteRefused
 
 _LOGGER = logging.getLogger(__name__)
@@ -126,6 +126,13 @@ class DbacsClimate(DbacsEntity, ClimateEntity):
     """One indoor-unit group, as a thermostat."""
 
     _attr_name = None  # the device name is the entity name
+    # Fixed for the life of the entity, and the object list is long: shown,
+    # never written to the recorder with every temperature change.
+    _unrecorded_attributes = frozenset({
+        "ac_number", "gateway", "gateway_device_instance", "gateway_host",
+        "tag", "system", "outdoor", "model", "rated_cooling_kw",
+        "rated_heating_kw", "bacnet_objects",
+    })
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_target_temperature_step = TEMP_STEP
     _attr_min_temp = DEFAULT_MIN_TEMP
@@ -281,6 +288,20 @@ class DbacsClimate(DbacsEntity, ClimateEntity):
             else None,
             "bacnet_write_priority": self.coordinator.write_priority,
         }
+        # Everything needed to check this unit's mapping by hand: which
+        # gateway, which address, and every object it publishes there.
+        coordinator = self.coordinator
+        attributes["ac_number"] = self.ac_number
+        attributes["gateway"] = coordinator.info.object_name
+        attributes["gateway_device_instance"] = coordinator.info.device_instance
+        attributes["gateway_host"] = coordinator.gateway.host
+        attributes["bacnet_objects"] = self._objects()
+        site_entry = coordinator.site.get(self.ac_number)
+        if site_entry is not None:
+            for key in ("tag", "system", "outdoor"):
+                if getattr(site_entry, key):
+                    attributes[key] = getattr(site_entry, key)
+
         # The model and its nominal duty, where the site mapping names the
         # model: what a heat-load sum compares the room's gains against.
         site = self.coordinator.site.get(self.ac_number)
@@ -313,6 +334,23 @@ class DbacsClimate(DbacsEntity, ClimateEntity):
         if filter_sign is not None:
             attributes["filter_dirty"] = filter_sign
         return attributes
+
+    def _objects(self) -> list[dict[str, Any]]:
+        """Each object this group publishes, as a BACnet tool would show it."""
+        group = self.coordinator.discovery.groups.get(self.ac_number)
+        out = []
+        for number, member in sorted(MEMBERS.items()):
+            if group is not None and not group.publishes(number):
+                continue
+            ref = PointRef(self.ac_number, member)
+            out.append({
+                "point": member.label,
+                "object": ref.object_name,
+                "type": str(member.object_type),
+                "instance": ref.instance,
+                "kind": str(member.kind),
+            })
+        return out
 
     # --- writing -------------------------------------------------------------
 

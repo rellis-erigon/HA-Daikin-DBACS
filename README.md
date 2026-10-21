@@ -90,6 +90,13 @@ The climate entity carries where things stand:
   unit's `reported` value is given and a warning is logged) or `refused`
   (with the `reason`).
 
+For checking a mapping by hand, the climate entity also carries where the
+unit lives: `gateway`, `gateway_device_instance`, `gateway_host`,
+`ac_number`, `diii_address`, the mapping's `tag`, `system` and `outdoor`,
+and `bacnet_objects` — every object the group publishes, with its point,
+object name, type, instance and whether it is a command or a status. These
+are fixed, so they are kept out of the recorder.
+
 The HA-Cards controller card reads these to say *sending*, *confirmed by
 the unit* or *not confirmed: the unit still reports …* on the unit itself.
 
