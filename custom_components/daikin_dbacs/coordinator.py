@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -40,6 +40,7 @@ from .gateway import (
     GatewayInfo,
     PointValue,
 )
+from .confirm import CONFIRMED_BY, Awaiting, matches
 from .writes import CHANGES_PER_DAY, WriteGuard, WriteRefused
 from .objects import (
     COV_MEMBERS,
@@ -159,6 +160,10 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         self._pending: dict[str, tuple[PointRef, Any]] = {}
         self._flushing: set[str] = set()
         self._held: dict[str, tuple[PointRef, int]] = {}
+        self._awaiting: dict[str, Awaiting] = {}
+        """Writes not yet seen to take, by point key. See confirm.py."""
+        self.last_change: dict[int, dict[str, Any]] = {}
+        """The outcome of the newest finished change, per unit."""
         """Points we have written and the priority we are holding them at.
 
         A BACnet write holds its slot until relinquished, so this is the
@@ -393,6 +398,7 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         if not points:
             return {}
 
+        started = self.hass.loop.time()
         try:
             readings = await self.gateway.read_points(points)
         except DbacsNotReady as err:
@@ -433,6 +439,7 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         # rather than letting an older reading overwrite a newer one.
         merged = dict(self.data or {})
         merged.update(readings)
+        self._confirm(readings, read_from=started)
         await self._async_refresh_descriptions(merged)
         self._apply_comms(merged)
         return merged
@@ -622,6 +629,7 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         """A notification arrived. Fold it in and tell the entities."""
         data = dict(self.data or {})
         data[point.key] = PointValue(point, value=value)
+        self._confirm({point.key: data[point.key]}, read_from=self.hass.loop.time())
         self.async_set_updated_data(data)
 
     @property
@@ -662,12 +670,18 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
             if not self.guard.allows_within_cap(point.key, now):
                 self.guard.check(point.key, now)  # raises with the reason
             self._coalesce(point, value, budget.last_at)
+            self._await(point, value, sent=False)
             self._show_optimistically(point, value)
             return
 
-        self.guard.check(point.key, now)
-        await self._async_check_priority(point)
-        await self._async_send(point, value)
+        try:
+            self.guard.check(point.key, now)
+            await self._async_check_priority(point)
+            await self._async_send(point, value)
+        except WriteRefused as err:
+            self._finish(Awaiting(point, value, now), "refused", reason=str(err))
+            raise
+        self._await(point, value, sent=True)
         self._show_optimistically(point, value)
 
     async def _async_send(self, point: PointRef, value: Any) -> None:
@@ -735,8 +749,100 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
                 await self._async_send(point, value)
             except WriteRefused as err:
                 _LOGGER.warning("held write to %s was not sent: %s", key, err)
+                waiting = self._awaiting.pop(key, None)
+                self._finish(waiting or Awaiting(point, value, 0.0), "refused",
+                             reason=str(err))
+                self.async_update_listeners()
+            else:
+                self._await(point, value, sent=True)
+                self.async_update_listeners()
         finally:
             self._flushing.discard(key)
+
+    # --- confirming writes --------------------------------------------------
+
+    def _await(self, point: PointRef, value: Any, *, sent: bool) -> None:
+        """Note a write to watch for, held back or on its way."""
+        if point.member.key not in CONFIRMED_BY:
+            return
+        now = self.hass.loop.time()
+        earlier = self._awaiting.get(point.key)
+        self._awaiting[point.key] = Awaiting(
+            point, value,
+            requested_at=earlier.requested_at if earlier else now,
+            sent_at=now if sent else None,
+        )
+
+    @property
+    def confirm_within(self) -> float:
+        """How long after sending a change must show: two sweeps and a bit,
+        since a status without change-of-value only arrives on a sweep."""
+        return 2 * self.scan_interval + 30
+
+    @callback
+    def _confirm(self, fresh: dict[str, PointValue], *, read_from: float) -> None:
+        """Settle the writes these readings speak for.
+
+        `read_from` is when the readings were asked for. A reading asked for
+        before a write went out says nothing about it, so it can neither
+        confirm nor refute it.
+        """
+        now = self.hass.loop.time()
+        for key, waiting in list(self._awaiting.items()):
+            if waiting.sent_at is None:
+                continue                       # still held; nothing sent yet
+            reading = fresh.get(waiting.status_key)
+            if (
+                reading is not None
+                and reading.ok
+                and read_from >= waiting.sent_at
+                and matches(waiting.point.member.key, waiting.value, reading.value)
+            ):
+                self._awaiting.pop(key)
+                self._finish(waiting, "confirmed", reported=reading.value)
+            elif now - waiting.sent_at > self.confirm_within:
+                self._awaiting.pop(key)
+                current = (self.data or {}).get(waiting.status_key)
+                if reading is not None and reading.ok:
+                    current = reading
+                self._finish(
+                    waiting, "not_confirmed",
+                    reported=current.value if current is not None and current.ok else None,
+                )
+
+    def _finish(
+        self,
+        waiting: Awaiting,
+        result: str,
+        *,
+        reported: Any = None,
+        reason: str | None = None,
+    ) -> None:
+        """Record how a change ended, for the unit's climate entity."""
+        if waiting.point.member.key not in CONFIRMED_BY:
+            return
+        outcome: dict[str, Any] = {
+            "setting": waiting.setting,
+            "member": waiting.point.member.key,
+            "value": waiting.value,
+            "result": result,
+            "reported": reported,
+            "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        if reason:
+            outcome["reason"] = reason
+        self.last_change[waiting.point.ac_number] = outcome
+        log = _LOGGER.warning if result == "not_confirmed" else _LOGGER.debug
+        log(
+            "%s: write of %r %s (unit reports %r)",
+            waiting.point.object_name, waiting.value,
+            result.replace("_", " "), reported,
+        )
+
+    def awaiting_for(self, ac_number: int) -> list[Awaiting]:
+        """The changes still unconfirmed on one unit."""
+        return [w for w in self._awaiting.values()
+                if w.point.ac_number == ac_number]
 
     @property
     def pending_writes(self) -> dict[str, Any]:

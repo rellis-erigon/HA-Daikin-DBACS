@@ -269,6 +269,9 @@ class DataUpdateCoordinator:
         self.data = data
         self.updates.append(data)
 
+    def async_update_listeners(self) -> None:
+        self.updates.append(self.data)
+
     async def _async_update_data(self):
         raise NotImplementedError
 

@@ -68,6 +68,31 @@ air conditioning:
   replaces the one already waiting and only the last value is sent — nudging
   a setpoint three times sends two writes, not three errors.
 
+### Knowing a change took
+
+A write the gateway accepts is a request, not a result: the unit can refuse
+it, clamp it, or miss it. So every change from the thermostat is followed
+until the unit's own **status** object, read fresh from the gateway after
+the write went out, shows it — mode on the mode status, not the mode
+command. The setpoint, which is one read/write object and is shown the
+moment it is written, is confirmed only by a reading taken after the write,
+never by its own echo. A unit in Auto counts as confirmed when it reports
+the Cool or Heat it chose.
+
+The climate entity carries where things stand:
+
+- `pending_changes` — each change not yet confirmed, as `setting`
+  (`hvac_mode`, `power`, `temperature`, `fan_mode`, `swing_mode`), `value`
+  and `state`: `held` while the write-rate guard spaces it, `sent` once it
+  has gone.
+- `last_change` — how the newest one ended: `result` is `confirmed`,
+  `not_confirmed` (nothing showed it within two sweeps and 30 seconds; the
+  unit's `reported` value is given and a warning is logged) or `refused`
+  (with the `reason`).
+
+The HA-Cards controller card reads these to say *sending*, *confirmed by
+the unit* or *not confirmed: the unit still reports …* on the unit itself.
+
 The points that take control away from whoever is in the room — forced stop,
 forced thermostat off, and the three that disable the wall controller — are
 left out entirely unless you ask for them separately.

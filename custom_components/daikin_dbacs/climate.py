@@ -100,6 +100,28 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
+def _shown(member: str, value: Any) -> Any:
+    """A raw command or status value as the climate entity would show it."""
+    if value is None:
+        return None
+    try:
+        if member == "on_off_command":
+            active = is_binary_active(value)
+            return None if active is None else ("on" if active else "off")
+        if member == "mode_command":
+            return MODE_TO_HVAC.get(int(float(value)))
+        if member == "fan_command":
+            return VALUE_TO_FAN.get(int(float(value)))
+        if member == "setpoint":
+            return round(float(value), 1)
+        if member == "air_direction_command":
+            v = int(float(value))
+            return "both" if v == 7 else "vertical" if v == 4 else "horizontal"
+    except (TypeError, ValueError):
+        return None
+    return value
+
+
 class DbacsClimate(DbacsEntity, ClimateEntity):
     """One indoor-unit group, as a thermostat."""
 
@@ -268,6 +290,22 @@ class DbacsClimate(DbacsEntity, ClimateEntity):
             if rated is not None:
                 attributes["rated_cooling_kw"] = rated.cooling_kw
                 attributes["rated_heating_kw"] = rated.heating_kw
+        # What has been asked of the unit and whether it has taken, so a
+        # card can say "sent", then "confirmed" or "not confirmed".
+        pending = [
+            {"setting": w.setting, "value": _shown(w.point.member.key, w.value),
+             "state": "sent" if w.sent_at is not None else "held"}
+            for w in self.coordinator.awaiting_for(self.ac_number)
+        ]
+        if pending:
+            attributes["pending_changes"] = pending
+        last = self.coordinator.last_change.get(self.ac_number)
+        if last:
+            attributes["last_change"] = {
+                **{k: v for k, v in last.items() if k != "member"},
+                "value": _shown(last["member"], last["value"]),
+                "reported": _shown(last["member"], last["reported"]),
+            }
         code = self.coordinator.fault_code(self.ac_number)
         if code:
             attributes["fault_code"] = code

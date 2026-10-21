@@ -120,6 +120,9 @@ class FakeGatewayState:
     priorities: dict[int, list[int]] = field(default_factory=dict)
     #: Refuse every write, as a gateway with a write-inhibited point would.
     refuse_writes: bool = False
+    #: Present_Values set by a test, by object instance: what a unit
+    #: reports once a write has (or has not) taken.
+    overrides: dict[int, Any] = field(default_factory=dict)
 
     rpm_calls: list[list[Any]] = field(default_factory=list)
     writes: list[tuple[str, int, Any, int | None]] = field(default_factory=list)
@@ -169,6 +172,8 @@ class FakeGatewayState:
 
     def present_value(self, instance: int) -> Any:
         """A plausible Present_Value for a point, derived from its address."""
+        if instance in self.overrides:
+            return self.overrides[instance]
         ac_number, member_number = split_instance(instance)
         member = MEMBERS.get(member_number)
         if member is None:
