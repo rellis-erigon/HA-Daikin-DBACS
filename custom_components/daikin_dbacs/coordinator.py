@@ -677,11 +677,14 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         try:
             self.guard.check(point.key, now)
             await self._async_check_priority(point)
+            # Counted as sent from just before it goes: the unit's answer can
+            # arrive by change-of-value while the write is still returning.
+            sending_at = self.hass.loop.time()
             await self._async_send(point, value)
         except WriteRefused as err:
             self._finish(Awaiting(point, value, now), "refused", reason=str(err))
             raise
-        self._await(point, value, sent=True)
+        self._await(point, value, sent=True, at=sending_at)
         self._show_optimistically(point, value)
 
     async def _async_send(self, point: PointRef, value: Any) -> None:
@@ -746,6 +749,7 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
             point, value = pending
             try:
                 await self._async_check_priority(point)
+                sending_at = self.hass.loop.time()
                 await self._async_send(point, value)
             except WriteRefused as err:
                 _LOGGER.warning("held write to %s was not sent: %s", key, err)
@@ -754,14 +758,16 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
                              reason=str(err))
                 self.async_update_listeners()
             else:
-                self._await(point, value, sent=True)
+                self._await(point, value, sent=True, at=sending_at)
                 self.async_update_listeners()
         finally:
             self._flushing.discard(key)
 
     # --- confirming writes --------------------------------------------------
 
-    def _await(self, point: PointRef, value: Any, *, sent: bool) -> None:
+    def _await(
+        self, point: PointRef, value: Any, *, sent: bool, at: float | None = None
+    ) -> None:
         """Note a write to watch for, held back or on its way."""
         if point.member.key not in CONFIRMED_BY:
             return
@@ -770,8 +776,40 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         self._awaiting[point.key] = Awaiting(
             point, value,
             requested_at=earlier.requested_at if earlier else now,
-            sent_at=now if sent else None,
+            sent_at=(now if at is None else at) if sent else None,
         )
+        if sent:
+            self.entry.async_create_background_task(
+                self.hass, self._async_check_soon(point.key),
+                name=f"{DOMAIN} confirm {point.key}",
+            )
+
+    #: When to read a changed unit's status back, seconds after the write.
+    #: A sweep of a whole gateway can take longer than the confirmation
+    #: window, so the one status that matters is read on its own.
+    CHECK_AFTER = (5, 15, 40)
+
+    async def _async_check_soon(self, key: str) -> None:
+        """Read the status that confirms a write, until it does."""
+        waited = 0
+        for at in self.CHECK_AFTER:
+            await asyncio.sleep(at - waited)
+            waited = at
+            waiting = self._awaiting.get(key)
+            if waiting is None or waiting.sent_at is None:
+                return
+            status = PointRef(waiting.point.ac_number,
+                              MEMBERS_BY_KEY[waiting.status_member])
+            started = self.hass.loop.time()
+            try:
+                readings = await self.gateway.read_points([status])
+            except DbacsError as err:
+                _LOGGER.debug("reading back %s failed: %s", status.object_name, err)
+                continue
+            data = dict(self.data or {})
+            data.update({k: v for k, v in readings.items() if v.ok})
+            self._confirm(readings, read_from=started)
+            self.async_set_updated_data(data)
 
     @property
     def confirm_within(self) -> float:

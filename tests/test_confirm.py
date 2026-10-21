@@ -105,3 +105,22 @@ def test_the_unit_says_where_it_lives_on_the_gateway():
     assert objects["StartStopStatus_001"]["kind"] == "status"
     # Fixed facts stay out of the recorder.
     assert "bacnet_objects" in unit._unrecorded_attributes
+
+
+def test_a_change_is_read_back_without_waiting_for_a_sweep():
+    """The status is read on its own soon after the write, so a slow sweep
+    cannot run the confirmation out of time."""
+    import asyncio
+
+    coordinator, state, hass, unit = unit_one()
+    coordinator.CHECK_AFTER = (0,)
+    reports(state, 1, "setpoint", 23.0)        # what the unit will say
+
+    async def go():
+        await unit.async_set_temperature(temperature=23.0)
+        await asyncio.sleep(0.05)              # let the read-back run
+
+    run(go())
+    attributes = unit.extra_state_attributes
+    assert "pending_changes" not in attributes
+    assert attributes["last_change"]["result"] == "confirmed"

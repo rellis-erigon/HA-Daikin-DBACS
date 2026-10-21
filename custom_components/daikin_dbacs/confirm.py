@@ -50,6 +50,10 @@ class Awaiting:
         return CONFIRMED_BY[self.point.member.key][1]
 
     @property
+    def status_member(self) -> str:
+        return CONFIRMED_BY[self.point.member.key][0]
+
+    @property
     def status_key(self) -> str:
         return f"{self.point.ac_number}_{CONFIRMED_BY[self.point.member.key][0]}"
 
