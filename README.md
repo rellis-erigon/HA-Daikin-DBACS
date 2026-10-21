@@ -282,10 +282,20 @@ the DIII address as the integration reports it:
     "area": "Block A",
     "tag": "ACU A-01",
     "system": "S-01",
-    "outdoor": "CU-S-01"
+    "outdoor": "CU-S-01",
+    "model": "FXDQ40TV1B"
   }
 }
 ```
+
+**A `model` makes the unit's rating usable.** The device shows the model
+instead of the gateway's generic one, and the climate entity carries
+`model`, `rated_cooling_kw` and `rated_heating_kw`: Daikin's nominal duty
+for the model's capacity class (FXDQ40 is the 40 class, 4.5 kW cooling and
+5.0 kW heating), read from the digits after the series letters. It is a
+rating for sizing and heat-load sums, not a measurement. It is read at
+setup, so a changed model needs the entry reloaded and a new integration
+version a restart.
 
 The address is read forgivingly — `"1 · 1-00"`, `"1 1-00"`, `"1-1-00"` or an
 explicit `ac_number` all work, because the file is maintained by hand.

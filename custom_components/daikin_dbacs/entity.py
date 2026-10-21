@@ -35,11 +35,14 @@ class DbacsEntity(CoordinatorEntity[DbacsCoordinator]):
         self._attr_entity_registry_enabled_default = (
             member.key in coordinator.enabled_member_keys
         )
+        # The gateway cannot say what is on the end of an address; the site
+        # mapping can, and where it does the device carries the real model.
+        site = coordinator.site.get(ac_number)
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, f"{entry_id}_{ac_number}")},
             name=f"DBACS {address_label(ac_number)}",
             manufacturer=MANUFACTURER,
-            model=MODEL,
+            model=(site.model if site is not None and site.model else MODEL),
             serial_number=f"D3 {port}-{line}-{group:02d}",
         )
         # Hang the group off the gateway's own device, by registry id rather

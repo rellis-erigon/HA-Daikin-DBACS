@@ -26,6 +26,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import DbacsConfigEntry
+from .capacity import capacity_of
 from .const import DEFAULT_MAX_TEMP, DEFAULT_MIN_TEMP, TEMP_STEP
 from .entity import DbacsEntity
 from .objects import MEMBERS_BY_KEY, PointRef, is_binary_active
@@ -258,6 +259,15 @@ class DbacsClimate(DbacsEntity, ClimateEntity):
             else None,
             "bacnet_write_priority": self.coordinator.write_priority,
         }
+        # The model and its nominal duty, where the site mapping names the
+        # model: what a heat-load sum compares the room's gains against.
+        site = self.coordinator.site.get(self.ac_number)
+        if site is not None and site.model:
+            attributes["model"] = site.model
+            rated = capacity_of(site.model)
+            if rated is not None:
+                attributes["rated_cooling_kw"] = rated.cooling_kw
+                attributes["rated_heating_kw"] = rated.heating_kw
         code = self.coordinator.fault_code(self.ac_number)
         if code:
             attributes["fault_code"] = code
