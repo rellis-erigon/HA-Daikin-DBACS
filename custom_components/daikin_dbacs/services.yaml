@@ -49,12 +49,12 @@ apply_mapping:
       name: Mapping file
       description: >-
         Override which file to read. Leave empty and each gateway uses
-        /share/HA-Daikin-DBACS-site/gateway-<device instance>-units.json,
+        /share/daikin_dbacs/gateway-<device instance>-units.json,
         which is what keeps two gateways apart — a DIII address is only
         unique within one gateway. If you set this while more than one
         gateway is configured, name the gateway with Host as well.
       required: false
-      example: /share/HA-Daikin-DBACS-site/gateway-12-units.json
+      example: /share/daikin_dbacs/gateway-12-units.json
       selector:
         text:
     set_names:

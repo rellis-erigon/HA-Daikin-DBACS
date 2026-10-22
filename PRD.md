@@ -5,7 +5,7 @@
 A Home Assistant custom integration that talks BACnet/IP to a Daikin
 "Interface for use in BACnet" gateway, turns each indoor-unit group into a
 Home Assistant device, and draws them with the
-[HA-Cards](https://github.com/rellis-erigon/HA-Cards) `hvac-controller-card`.
+[HA-Cards](https://github.com/rellis-erigon/HA-rellis-erigon-Cards) `hvac-controller-card`.
 
 ---
 

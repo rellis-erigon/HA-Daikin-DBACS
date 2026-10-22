@@ -36,9 +36,9 @@ _LOGGER = logging.getLogger(__name__)
 _DIGITS = re.compile(r"\d+")
 
 #: Where mapping files are looked for. Outside the configuration directory
-#: on purpose: it is site data shared with the other bridges, and it must
+#: on purpose: it is site data in a folder of its own, and it must
 #: never be mistaken for part of this integration.
-SITE_DIR = "/share/HA-Daikin-DBACS-site"
+SITE_DIR = "/share/daikin_dbacs"
 
 
 def path_for(device_instance: int | str) -> str:

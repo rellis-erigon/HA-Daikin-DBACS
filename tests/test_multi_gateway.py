@@ -38,12 +38,13 @@ class TestPathForGateway:
         assert path_for(11) == f"{mapping.SITE_DIR}/gateway-11-units.json"
 
     def test_the_real_location_is_outside_the_configuration_directory(self):
-        """Site data is shared with the other bridges and is not ours.
+        """Site data lives outside the configuration directory, in a folder
+        of its own that no other project owns.
 
         This one is about the shipped default rather than the redirected
         one, so it reads the constant as imported.
         """
-        assert REAL_SITE_DIR.startswith("/share/")
+        assert REAL_SITE_DIR == "/share/daikin_dbacs"
 
     @pytest.mark.parametrize("instance", [None, "", "eleven", -1])
     def test_an_instance_that_is_not_a_number_is_refused(self, instance):

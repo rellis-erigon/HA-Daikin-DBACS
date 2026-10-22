@@ -304,8 +304,13 @@ data:
   dry_run: true          # reports; set false to apply
 ```
 
-It defaults to `/share/HA-Daikin-DBACS-site/gateway-11-units.json`, keyed by
-the DIII address as the integration reports it:
+Each gateway reads its own file, `/share/daikin_dbacs/gateway-<device instance>-units.json`
+(for a gateway whose BACnet device instance is 11, `gateway-11-units.json`). The
+folder is outside the configuration directory on purpose: it is site data, and
+nothing in this repository ships or needs one. Without a file the integration
+still works — units keep their address names, and the model, rated kW and
+refrigerant systems are simply absent. The file is keyed by the DIII address
+as the integration reports it:
 
 ```json
 {
@@ -319,6 +324,9 @@ the DIII address as the integration reports it:
   }
 }
 ```
+
+> **Upgrading from 0.4:** the folder was `/share/HA-Daikin-DBACS-site`. Move the
+> `gateway-*-units.json` files to `/share/daikin_dbacs/` and restart.
 
 **A `model` makes the unit's rating usable.** The device shows the model
 instead of the gateway's generic one, and the climate entity carries
@@ -428,12 +436,12 @@ test needs data from a real installation.
 
 ## Roadmap
 
-See [PRD.md](PRD.md) for the full plan. In short: Phase 2 adds `climate`
-entities and a head-end-aware write path; Phase 3 adds areas, card selection
-and a self-building dashboard through
-[HA-Cards](https://github.com/rellis-erigon/HA-Cards); Phase 4 adds synthetic
-outdoor units, accumulated power on the energy dashboard, and heat reclaim
-ventilators.
+See [PRD.md](PRD.md) for the full plan. Phases 1–3 are in: read-only
+discovery, two-way control with the write-rate guard and change
+confirmation, and naming, areas and cards through
+[HA Cards](https://github.com/rellis-erigon/HA-rellis-erigon-Cards). Of Phase 4,
+the synthetic outdoor units are in, and the accumulator and ventilation points
+are available but off by default; the PRD lists what is left.
 
 ## Trademarks
 

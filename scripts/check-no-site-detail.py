@@ -39,6 +39,7 @@ FORBIDDEN: list[tuple[str, str]] = [
     (r"\bmercure\b", "property brand name"),
     (r"\bbunnings\b", "property brand name"),
     (r"\bdoncaster\b", "place name"),
+    (r"\bmelbourne\b", "place name"),
     (r"\bJace\d", "real station hostname — use Station1, Station2"),
     (r"\bSiteJace\d", "real station hostname"),
     (r"\bMercureBMS\b", "real station folder — use SiteBMS"),
@@ -46,10 +47,10 @@ FORBIDDEN: list[tuple[str, str]] = [
     (r"DB[-$]2?d?L\d\.\d", "real electrical board — use DB-A1-Power"),
     (r"Rooms/\$?33\d\d", "real room number — use Rooms/A1"),
     (r"\bRooms/3\d\d\b", "real room number — use Rooms/A1"),
-    # The Daikin side: guest rooms are 4xx-6xx, equipment tags are
+    # The Daikin side: guest rooms are 3xx-6xx, equipment tags are
     # ACU L4-09 and the refrigerant systems are H-xx / PS-xx / CU-H-xx.
-    (r"\bRoom [456]\d\d\b", "real room number — use Room A1"),
-    (r"\brm [456]\d\d\b", "real room number — use Room A1"),
+    (r"\bRoom [3-6]\d\d\b", "real room number — use Room A1"),
+    (r"\brm [3-6]\d\d\b", "real room number — use Room A1"),
     (r"\bACU[ -]L[3-6]-\d", "real equipment tag — use ACU A-01"),
     (r"\bCU-H-\d\d\b", "real outdoor unit — use CU-S-01"),
     # Private address ranges. A real one in a public repo tells a reader
@@ -59,7 +60,8 @@ FORBIDDEN: list[tuple[str, str]] = [
     (r"\b172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b", "private IP — use 192.0.2.x"),
 ]
 
-SUFFIXES = {".py", ".yaml", ".yml", ".md", ".json", ".ts", ".js", ".txt", ".cfg", ".toml"}
+SUFFIXES = {".py", ".yaml", ".yml", ".md", ".json", ".ts", ".js", ".mjs", ".txt", ".cfg",
+            ".toml", ".html", ".sh"}
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache"}
 
 #: This file names the patterns, so it is allowed to contain them.
