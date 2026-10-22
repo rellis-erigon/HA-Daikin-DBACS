@@ -1,25 +1,29 @@
 #!/usr/bin/env python3
 """Fail if anything site-specific has got into the repository.
 
-This repository is public. Nothing that identifies the estate it was
-developed against belongs in it — not in code, comments, tests, fixtures,
-documentation or planning notes. Real IP addresses, station and processor
-hostnames, property names, room numbers and real device or point paths all
-count.
+This repository is public. Nothing that identifies a real installation
+belongs in it — not in code, comments, tests, fixtures, documentation or
+planning notes. Real IP addresses, station and processor hostnames,
+property names, room numbers and real device or point paths all count.
 
-This check exists because scrubbing once did not hold. The detail was
-removed in September 2026 and was back in two new files within a fortnight,
-because a real path makes a docstring concrete and a test realistic, so it
-gets written back by anyone documenting what they saw on site. A list of
-patterns that fails the build is the only version of this that survives
-contact with people doing their jobs.
+Two lists are checked:
+
+- **The generic rules below**: private IP ranges, which no public example
+  ever needs.
+- **The site's own words**, from a patterns file kept *outside* the
+  repository, because a published list of what to hide names exactly what
+  it hides. It is looked for at `$SITE_DETAIL_PATTERNS`, then at
+  `site-detail-patterns.txt` beside this repository's folder. One regular
+  expression per line, optionally followed by ` | reason`; `#` starts a
+  comment. Without the file only the generic rules run, and the script
+  says so.
 
 Use documentation-safe stand-ins instead:
 
     addresses   192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24  (RFC 5737)
     stations    Station1, Station2, SiteBMS
     places      Main Hall, Meeting Room, Block A, Room A1
-    equipment   AHU1, DB-A1-Power, A_Kitchen, Fridge-1
+    equipment   AHU1, DB-A1-Power, A_Kitchen, ACU A-01, Fridge-1
 
 Run it directly, or let CI do it:
 
@@ -28,44 +32,45 @@ Run it directly, or let CI do it:
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
 
-#: Each pattern is a thing that must never appear, with why it matters.
-#: Keep these specific. A pattern broad enough to match innocent text gets
-#: switched off, and a check that is switched off protects nothing.
+#: Generic rules: a real private address in a public repo tells a reader how
+#: a network is addressed; the documentation ranges do not.
 FORBIDDEN: list[tuple[str, str]] = [
-    (r"\bmercure\b", "property brand name"),
-    (r"\bbunnings\b", "property brand name"),
-    (r"\bdoncaster\b", "place name"),
-    (r"\bmelbourne\b", "place name"),
-    (r"\bJace\d", "real station hostname — use Station1, Station2"),
-    (r"\bSiteJace\d", "real station hostname"),
-    (r"\bMercureBMS\b", "real station folder — use SiteBMS"),
-    (r"\bMain_Kitchen\b", "real equipment path — use A_Kitchen"),
-    (r"DB[-$]2?d?L\d\.\d", "real electrical board — use DB-A1-Power"),
-    (r"Rooms/\$?33\d\d", "real room number — use Rooms/A1"),
-    (r"\bRooms/3\d\d\b", "real room number — use Rooms/A1"),
-    # The Daikin side: guest rooms are 3xx-6xx, equipment tags are
-    # ACU L4-09 and the refrigerant systems are H-xx / PS-xx / CU-H-xx.
-    (r"\bRoom [3-6]\d\d\b", "real room number — use Room A1"),
-    (r"\brm [3-6]\d\d\b", "real room number — use Room A1"),
-    (r"\bACU[ -]L[3-6]-\d", "real equipment tag — use ACU A-01"),
-    (r"\bCU-H-\d\d\b", "real outdoor unit — use CU-S-01"),
-    # Private address ranges. A real one in a public repo tells a reader
-    # how the estate is addressed; the documentation ranges do not.
     (r"\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", "private IP — use 192.0.2.x"),
     (r"\b192\.168\.\d{1,3}\.\d{1,3}\b", "private IP — use 192.0.2.x"),
     (r"\b172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b", "private IP — use 192.0.2.x"),
 ]
 
-SUFFIXES = {".py", ".yaml", ".yml", ".md", ".json", ".ts", ".js", ".mjs", ".txt", ".cfg",
-            ".toml", ".html", ".sh"}
+SUFFIXES = {".py", ".yaml", ".yml", ".md", ".json", ".ts", ".js", ".mjs", ".txt",
+            ".cfg", ".toml", ".html", ".sh"}
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache"}
 
-#: This file names the patterns, so it is allowed to contain them.
 SELF = Path(__file__).resolve()
+ROOT = SELF.parent.parent
+
+
+def site_patterns() -> tuple[list[tuple[str, str]], Path | None]:
+    """The site's own words, from the file outside the repository."""
+    for candidate in (os.environ.get("SITE_DETAIL_PATTERNS"),
+                      ROOT.parent / "site-detail-patterns.txt"):
+        if not candidate:
+            continue
+        path = Path(candidate)
+        if not path.is_file():
+            continue
+        out = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            pattern, _, why = line.partition(" | ")
+            out.append((pattern.strip(), why.strip() or "site-specific"))
+        return out, path
+    return [], None
 
 
 def files(root: Path):
@@ -79,11 +84,11 @@ def files(root: Path):
 
 
 def main() -> int:
-    root = Path(__file__).resolve().parent.parent
-    compiled = [(re.compile(p, re.IGNORECASE), why) for p, why in FORBIDDEN]
+    extra, source = site_patterns()
+    compiled = [(re.compile(p, re.IGNORECASE), why) for p, why in FORBIDDEN + extra]
     findings: list[str] = []
 
-    for path in files(root):
+    for path in files(ROOT):
         try:
             lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
         except OSError:
@@ -93,10 +98,12 @@ def main() -> int:
                 match = pattern.search(line)
                 if match:
                     findings.append(
-                        f"{path.relative_to(root)}:{number}: "
+                        f"{path.relative_to(ROOT)}:{number}: "
                         f"{match.group(0)!r} — {why}"
                     )
 
+    if source is None:
+        print("No site patterns file found; checked the generic rules only.")
     if findings:
         print(f"{len(findings)} piece(s) of site-specific detail found:\n")
         for finding in findings:
