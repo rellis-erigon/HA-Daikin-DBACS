@@ -630,7 +630,7 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         data = dict(self.data or {})
         data[point.key] = PointValue(point, value=value)
         self._confirm({point.key: data[point.key]}, read_from=self.hass.loop.time())
-        self.async_set_updated_data(data)
+        self._publish(data)
 
     @property
     def cov_summary(self) -> dict[str, int]:
@@ -714,7 +714,19 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         """
         data = dict(self.data or {})
         data[point.key] = PointValue(point, value=value)
-        self.async_set_updated_data(data)
+        self._publish(data)
+
+    def _publish(self, data: dict[str, PointValue]) -> None:
+        """Show data that arrived between sweeps, without moving the sweep.
+
+        Not `async_set_updated_data`: that also restarts the refresh timer,
+        so with change-of-value arriving every second or two across a
+        gateway, the next sweep was pushed back for ever and every point
+        that is only swept (setpoint, mode, fan, a change made at the wall
+        controller) stopped updating after the first sweep.
+        """
+        self.data = data
+        self.async_update_listeners()
 
     def _coalesce(
         self, point: PointRef, value: Any, last_at: float
@@ -809,7 +821,7 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
             data = dict(self.data or {})
             data.update({k: v for k, v in readings.items() if v.ok})
             self._confirm(readings, read_from=started)
-            self.async_set_updated_data(data)
+            self._publish(data)
 
     @property
     def confirm_within(self) -> float:

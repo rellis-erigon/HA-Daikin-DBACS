@@ -284,6 +284,25 @@ class TestChangeOfValue:
         assert coordinator.data[point.key].value == 29.5
         assert coordinator.updates
 
+    def test_a_notification_does_not_postpone_the_sweep(self):
+        """Change-of-value must not restart the refresh timer.
+
+        Home Assistant's async_set_updated_data restarts it. With
+        notifications arriving every second or two, the sweep was pushed
+        back for ever, so setpoint, mode and fan (which are only swept)
+        froze at their first reading while room temperature kept moving.
+        """
+        state = fake.FakeGatewayState(populated={0})
+        coordinator, _ = build(state)
+        run(coordinator.async_discover())
+        run(coordinator.async_refresh())
+        before = len(coordinator.updates)
+
+        for value in (29.5, 29.0, 28.5):
+            coordinator._cov_update(coordinator.points()[0], value)
+        assert coordinator.refresh_timer_resets == 0
+        assert len(coordinator.updates) == before + 3
+
 
 class TestSubscriptionRefreshStagger:
     """Why the lifetimes differ from one subscription to the next.

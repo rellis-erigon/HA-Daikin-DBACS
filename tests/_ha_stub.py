@@ -252,6 +252,9 @@ class DataUpdateCoordinator:
         self.data = None
         self.last_update_success = True
         self.updates: list = []
+        #: How often the refresh timer was restarted, as Home Assistant's
+        #: async_set_updated_data does.
+        self.refresh_timer_resets = 0
 
     def __class_getitem__(cls, _item):
         return cls
@@ -267,6 +270,7 @@ class DataUpdateCoordinator:
 
     def async_set_updated_data(self, data) -> None:
         self.data = data
+        self.refresh_timer_resets += 1
         self.updates.append(data)
 
     def async_update_listeners(self) -> None:
