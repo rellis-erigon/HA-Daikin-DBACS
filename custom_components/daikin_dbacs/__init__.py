@@ -60,6 +60,7 @@ SERVICE_RELEASE_CONTROL = "release_control"
 SERVICE_APPLY_MAPPING = "apply_mapping"
 SERVICE_GENERATE_CARDS = "generate_cards"
 SERVICE_PURGE_ORPHANS = "purge_orphans"
+SERVICE_RECHECK = "recheck"
 SERVICE_SELF_TEST = "self_test"
 
 PLATFORMS: list[Platform] = [
@@ -563,6 +564,32 @@ def _register_services(hass: HomeAssistant) -> None:
         DOMAIN,
         SERVICE_PURGE_ORPHANS,
         purge_orphans,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+
+    async def recheck(call) -> dict[str, Any]:
+        """Ask every gateway about its faults now, rather than next sweep."""
+        wanted_host = call.data.get("host")
+        report: dict[str, Any] = {"gateways": []}
+        for entry in hass.config_entries.async_entries(DOMAIN):
+            coordinator = getattr(entry, "runtime_data", None)
+            if coordinator is None:
+                continue
+            if wanted_host and entry.data.get(CONF_HOST) != wanted_host:
+                continue
+            try:
+                summary = await coordinator.async_recheck()
+            except DbacsError as err:
+                summary = {"host": entry.data.get(CONF_HOST), "ok": False,
+                           "error": str(err)}
+            summary["gateway"] = entry.title
+            report["gateways"].append(summary)
+        return report
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_RECHECK,
+        recheck,
         supports_response=SupportsResponse.OPTIONAL,
     )
 

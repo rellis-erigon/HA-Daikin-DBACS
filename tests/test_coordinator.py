@@ -203,6 +203,48 @@ class TestSweeping:
         assert coordinator.discovery.groups[1].communicating is False
         assert coordinator.active_groups == (0,)
 
+    def test_a_unit_that_stops_communicating_is_seen_coming_back(self):
+        # It used to drop out of the sweep entirely, communication status
+        # and all, and so stayed offline until Home Assistant restarted.
+        state = fake.FakeGatewayState(populated={0, 1})
+        coordinator, _ = build(state)
+        run(coordinator.async_discover())
+        state.dead.add(1)
+        run(coordinator.async_refresh())
+        assert coordinator.silent_groups == (1,)
+        assert [p.ac_number for p in coordinator.points()].count(1) == 1
+
+        state.dead.clear()
+        run(coordinator.async_refresh())
+        assert coordinator.silent_groups == ()
+        assert coordinator.active_groups == (0, 1)
+        # It had entities from setup, so nothing needs reloading.
+        assert coordinator.hass.config_entries.reloaded == []
+
+    def test_a_unit_dead_at_setup_coming_back_reloads_the_entry(self):
+        state = fake.FakeGatewayState(populated={0, 1}, dead={1})
+        coordinator, _ = build(state)
+        run(coordinator.async_discover())
+        state.dead.clear()
+        run(coordinator.async_refresh())
+        assert coordinator.active_groups == (0, 1)
+        assert coordinator.hass.config_entries.reloaded == [
+            coordinator.entry.entry_id
+        ]
+
+    def test_recheck_reports_what_recovered(self):
+        state = fake.FakeGatewayState(populated={0, 1, 2})
+        coordinator, _ = build(state)
+        run(coordinator.async_discover())
+        state.dead.update({1, 2})
+        run(coordinator.async_refresh())
+        state.dead.discard(1)
+        report = run(coordinator.async_recheck())
+        assert report["recovered"] == [address_label(1)]
+        assert report["not_communicating"] == [address_label(2)]
+        assert report["newly_lost"] == []
+        assert report["ok"] is True
+
     def test_an_empty_gateway_sweeps_to_nothing_without_failing(self):
         state = fake.FakeGatewayState(populated=set())
         coordinator, _ = build(state)

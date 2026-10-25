@@ -301,3 +301,16 @@ class TestPurgeOrphans:
         report = call(hass, "purge_orphans",
                       {"dry_run": True, "host": "192.0.2.99"})
         assert report["orphans"] == []
+
+
+class TestRecheck:
+    def test_it_reports_each_gateway(self, loaded):
+        hass, entry, _devices = loaded
+        report = call(hass, "recheck", {})
+        assert len(report["gateways"]) == 1
+        assert report["gateways"][0]["gateway"] == entry.title
+        assert report["gateways"][0]["ok"] is True
+
+    def test_another_host_is_left_alone(self, loaded):
+        hass, _entry, _devices = loaded
+        assert call(hass, "recheck", {"host": "198.51.100.1"}) == {"gateways": []}

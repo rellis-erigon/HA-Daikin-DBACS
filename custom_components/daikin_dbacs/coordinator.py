@@ -155,6 +155,9 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         self._restart_token = info.restart_token
         self._cov_points: dict[str, PointRef] = {}
         self._cov_failed: set[str] = set()
+        # The live groups the first discovery found: the ones that have
+        # entities. Any other group coming back needs a reload to get them.
+        self.groups_at_setup: set[int] | None = None
         self._descriptions: dict[str, str | None] = {}
         self._priorities: dict[str, list[int]] = {}
         self._pending: dict[str, tuple[PointRef, Any]] = {}
@@ -328,6 +331,8 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
             discovered_by=how,
         )
         self.discovery = discovery
+        if self.groups_at_setup is None:
+            self.groups_at_setup = set(discovery.live_numbers)
 
         if discovery.dead:
             _LOGGER.warning(
@@ -367,7 +372,25 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         points: list[PointRef] = []
         for ac in self.active_groups:
             points.extend(self.points_of(ac, keys))
+        # A group that has stopped communicating is not swept, but its
+        # communication status still is: it is the only reading that can
+        # say the unit is back. Leaving it out is what kept fifteen units
+        # "offline" for hours after DIII-NET had recovered.
+        comms = MEMBERS_BY_KEY["communication_status"]
+        points.extend(PointRef(ac, comms) for ac in self.silent_groups)
         return points
+
+    @property
+    def silent_groups(self) -> tuple[int, ...]:
+        """Present groups reporting a communication fault, within selection."""
+        selected = self.selected_groups
+        return tuple(
+            ac
+            for ac, group in sorted(self.discovery.groups.items())
+            if group.present
+            and group.communicating is False
+            and (selected is None or ac in selected)
+        )
 
     def points_of(
         self, ac_number: int, member_keys: tuple[str, ...] | None = None
@@ -446,7 +469,8 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
 
     def _apply_comms(self, readings: dict[str, PointValue]) -> None:
         """Fold communication status back into what we think of each group."""
-        for ac in self.active_groups:
+        lost, back = [], []
+        for ac in self.active_groups + self.silent_groups:
             reading = readings.get(f"{ac}_communication_status")
             if reading is None or not reading.ok:
                 continue
@@ -454,8 +478,63 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
             if active is None:
                 continue
             group = self.discovery.groups.get(ac)
-            if group is not None:
-                group.communicating = not active
+            if group is None:
+                continue
+            was = group.communicating
+            group.communicating = not active
+            if was is not False and active:
+                lost.append(ac)
+            elif was is False and not active:
+                back.append(ac)
+        if lost:
+            _LOGGER.warning(
+                "%s: %d group(s) stopped communicating: %s",
+                self.gateway.host, len(lost),
+                ", ".join(address_label(ac) for ac in lost),
+            )
+        if back:
+            _LOGGER.info(
+                "%s: %d group(s) communicating again: %s",
+                self.gateway.host, len(back),
+                ", ".join(address_label(ac) for ac in back),
+            )
+            # A group that was dead at setup has no entities to come back
+            # to; only a reload creates them.
+            if self.groups_at_setup is not None and any(
+                ac not in self.groups_at_setup for ac in back
+            ):
+                self.hass.config_entries.async_schedule_reload(
+                    self.entry.entry_id
+                )
+
+    async def async_recheck(self) -> dict[str, Any]:
+        """Ask every published group how it is, then sweep.
+
+        For the moment a fault list looks wrong: a unit marked offline is
+        asked again straight away rather than at the next sweep, and the
+        sweep that follows replaces every reading the fault list is built
+        from.
+        """
+        before = set(self.silent_groups)
+        comms = MEMBERS_BY_KEY["communication_status"]
+        present = [
+            ac for ac, group in sorted(self.discovery.groups.items())
+            if group.present
+        ]
+        if present:
+            readings = await self.gateway.read_points(
+                PointRef(ac, comms) for ac in present
+            )
+            self._apply_comms(readings)
+        await self.async_refresh()
+        after = set(self.silent_groups)
+        return {
+            "host": self.gateway.host,
+            "ok": self.last_update_success,
+            "recovered": [address_label(ac) for ac in sorted(before - after)],
+            "not_communicating": [address_label(ac) for ac in sorted(after)],
+            "newly_lost": [address_label(ac) for ac in sorted(after - before)],
+        }
 
     async def _async_refresh_descriptions(
         self, readings: dict[str, PointValue]

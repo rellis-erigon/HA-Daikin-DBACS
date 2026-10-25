@@ -133,6 +133,24 @@ purge_orphans:
       selector:
         text:
 
+recheck:
+  name: Recheck faults
+  description: >-
+    Ask the gateway now about every unit it publishes, including those
+    marked as not communicating, then read every point again. Use it when
+    the fault list looks out of date. Reports the units that recovered and
+    those still not communicating. Reads only.
+  fields:
+    host:
+      name: Gateway
+      description: >-
+        Recheck one gateway only, by its address. Leave empty for all of
+        them.
+      required: false
+      example: 192.0.2.10
+      selector:
+        text:
+
 self_test:
   name: Test the connection
   description: >-

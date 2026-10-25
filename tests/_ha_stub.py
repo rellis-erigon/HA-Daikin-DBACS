@@ -123,6 +123,9 @@ class _ConfigEntries:
     async def async_reload(self, entry_id: str) -> None:
         self.reloaded.append(entry_id)
 
+    def async_schedule_reload(self, entry_id: str) -> None:
+        self.reloaded.append(entry_id)
+
     def async_update_entry(self, entry, **changes) -> bool:
         """Replace fields on an entry, as Home Assistant's own does."""
         for field, value in changes.items():
