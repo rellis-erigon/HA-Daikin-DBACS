@@ -16,6 +16,7 @@ from homeassistant.components.sensor import SensorEntity
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .codes import meaning
 from .const import DOMAIN, MANUFACTURER
 
 
@@ -142,6 +143,17 @@ class SystemFaultCode(SystemEntity, SensorEntity):
         if rollup is None:
             return None
         return rollup.fault_code or "Normal"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        attributes = super().extra_state_attributes or {}
+        rollup = self.rollup
+        if rollup is not None and rollup.fault_code:
+            meanings = [m for code in sorted(set(rollup.codes))
+                        if (m := meaning(code))]
+            if meanings:
+                attributes["meaning"] = "; ".join(meanings)
+        return attributes
 
 
 def binary_sensors(coordinator) -> list[SystemEntity]:

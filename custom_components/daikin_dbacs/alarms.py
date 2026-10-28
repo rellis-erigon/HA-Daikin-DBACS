@@ -35,6 +35,7 @@ from homeassistant.components.binary_sensor import (
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .codes import describe
 from .const import DOMAIN
 from .entity import DbacsEntity
 from .objects import MEMBERS_BY_KEY, address_label
@@ -139,17 +140,20 @@ class UnitsInAlarm(CoordinatorEntity, BinarySensorEntity):
                 continue
             code = coordinator.malfunction(ac)
             if code:
-                faulted.append(f"{coordinator.unit_label(ac)}: {code}")
+                faulted.append(f"{coordinator.unit_label(ac)}: {describe(code)}")
         outdoor = []
         for name, system in coordinator.systems.items():
             known = [ac for ac in system.ac_numbers
                      if ac in coordinator.watched_groups]
             if known and all(coordinator.not_responding(ac) for ac in known):
-                outdoor.append(f"{system.label}: no indoor unit answering")
+                outdoor.append(
+                    f"{system.label}: none of its {len(known)} indoor units "
+                    "answering (the outdoor unit, its power or its wiring)")
                 continue
             rollup = coordinator.rollup(name)
             if rollup is not None and rollup.faulted:
-                outdoor.append(f"{system.label}: {rollup.fault_code or 'Malfunction'}")
+                outdoor.append(
+                    f"{system.label}: {describe(rollup.fault_code) or 'Malfunction'}")
         return quiet, faulted, outdoor
 
     @property

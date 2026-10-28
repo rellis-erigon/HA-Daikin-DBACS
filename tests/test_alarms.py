@@ -137,7 +137,8 @@ class TestOutdoorUnit:
         assert alarm.extra_state_attributes["all_not_responding"] is True
         summary = one(entities(entry), alarms.UnitsInAlarm)
         assert summary.extra_state_attributes["outdoor_units"] == [
-            "CU-1: no indoor unit answering"]
+            "CU-1: none of its 2 indoor units answering "
+            "(the outdoor unit, its power or its wiring)"]
 
 
 class TestGateway:
@@ -154,7 +155,9 @@ class TestGateway:
         assert summary.is_on is True
         attrs = summary.extra_state_attributes
         assert attrs["in_malfunction"] == 1
-        assert attrs["units_in_malfunction"][0].startswith("Unit C (1 · 1-02): ")
+        # The code, with what Daikin says it means.
+        assert attrs["units_in_malfunction"] == [
+            "Unit C (1 · 1-02): U1 (power supply reversed or lost phase)"]
         assert attrs["outdoor_units"][0].startswith("CU-2: ")
 
     def test_a_unit_not_responding_is_in_alarm(self):
@@ -180,3 +183,12 @@ def test_remembering_a_unit_does_not_reload_the_entry():
     entry.options = {"scan_interval": 30}
     run(_async_options_updated(hass, entry))
     assert hass.config_entries.reloaded == [entry.entry_id]
+
+
+def test_codes_carry_their_meaning_and_unknown_ones_are_not_guessed():
+    from custom_components.daikin_dbacs.codes import describe, meaning
+
+    assert describe("E5") == "E5 (inverter compressor locked or overloaded)"
+    assert meaning("u4") == "indoor and outdoor units not communicating"
+    assert describe("Z9") == "Z9"
+    assert describe(None) is None

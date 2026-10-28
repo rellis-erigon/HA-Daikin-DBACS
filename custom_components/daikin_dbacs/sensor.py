@@ -12,6 +12,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import DbacsConfigEntry
+from .codes import meaning
 from .entity import DbacsEntity
 from .outdoor import sensors as system_entities
 from .objects import Kind, Member, ObjType, READABLE, member_state
@@ -147,6 +148,9 @@ class DbacsSensor(DbacsEntity, SensorEntity):
             code = self.coordinator.fault_code(self.ac_number)
             if code:
                 attributes["fault_code"] = code
+                what = meaning(code)
+                if what:
+                    attributes["meaning"] = what
             reading = self.reading
             if reading is not None and reading.ok:
                 attributes["raw_value"] = str(reading.value)

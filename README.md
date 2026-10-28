@@ -239,6 +239,13 @@ that is already dead when Home Assistant starts still raises it.
   indoor unit answering or in malfunction, each listed in its attributes.
   This is the one to hang a notification on.
 
+**Fault codes say what they mean.** A unit's *Malfunction code* sensor, an
+outdoor unit's *Fault code* and the *Units in alarm* lists carry Daikin's
+standard meaning beside the code (`E5 (inverter compressor locked or
+overloaded)`), from the VRV service manual's table in `codes.py`. It is a
+starting point for the engineer, not a diagnosis: the same code can have more
+than one cause, and a code not in the table is shown alone, never guessed.
+
 A unit removed on purpose: `daikin_dbacs.recheck` with `forget_missing: true`
 stops expecting the units the gateway no longer publishes at all.
 
