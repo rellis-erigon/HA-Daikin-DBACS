@@ -219,6 +219,29 @@ dashboard ends up confidently wrong:
   unavailable rather than holding its last value, because a confident number
   from a dead point is the one failure worth designing against.
 
+### A unit that was here and has gone quiet is an alarm
+
+Unavailable is right for a reading and wrong for an alarm: it is grey on a
+dashboard and fires nothing that keys on `on`. So every group the gateway
+has ever published live is remembered in the config entry, and that unit,
+dead or alive, carries a *Not responding* problem sensor that stays
+available and turns **on** when it stops answering, with the reason:
+`DIII-NET communication fault`, `not answering reads`, `no longer published
+by the gateway`, or `gateway not answering`. Because the list survives a
+restart, a unit that is already dead when Home Assistant starts still
+raises it.
+
+- **Each outdoor unit** gets *Not responding* too: on when any of its indoor
+  units is, with `all_not_responding` true when every one of them is, which
+  points at the outdoor unit or its wiring rather than at the rooms.
+- **The gateway** gets *Units in alarm*: on when any unit is not responding
+  or not Normal (Alarm reads Malfunction), and any outdoor unit with no
+  indoor unit answering or in malfunction, each listed in its attributes.
+  This is the one to hang a notification on.
+
+A unit removed on purpose: `daikin_dbacs.recheck` with `forget_missing: true`
+stops expecting the units the gateway no longer publishes at all.
+
 A gateway that is still scanning its DIII-NET ports answers
 `configuration-in-progress`. That means *not yet*, not *nothing there*, so it
 is waited out rather than treated as an empty system.

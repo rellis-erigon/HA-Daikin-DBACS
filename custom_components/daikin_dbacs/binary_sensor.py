@@ -11,6 +11,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import DbacsConfigEntry
 from .entity import DbacsEntity
+from .alarms import binary_sensors as alarm_entities
 from .outdoor import binary_sensors as system_entities
 from .objects import Kind, Member, ObjType, READABLE, is_binary_active
 
@@ -38,6 +39,7 @@ async def async_setup_entry(
     coordinator = entry.runtime_data
     # Outdoor units first: on a dashboard the thing that breaks belongs
     # above the ninety-six things that report it.
+    async_add_entities(alarm_entities(coordinator))
     async_add_entities(system_entities(coordinator))
     async_add_entities(
         DbacsBinarySensor(coordinator, point.ac_number, point.member)

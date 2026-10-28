@@ -9,12 +9,14 @@ import pytest
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-from custom_components.daikin_dbacs import binary_sensor, sensor
+from custom_components.daikin_dbacs import alarms, binary_sensor, sensor
 from custom_components.daikin_dbacs import gateway as gw
 from custom_components.daikin_dbacs.const import OPT_MEMBERS
 from custom_components.daikin_dbacs.coordinator import DbacsCoordinator
 
 import fake_gateway as fake
+
+ALARMS = (alarms.UnitNotResponding, alarms.SystemNotResponding, alarms.UnitsInAlarm)
 
 
 def run(coro):
@@ -35,13 +37,14 @@ def build(state=None, options=None):
 
 
 def collect(module, entry):
+    """The point entities a platform creates (the alarms: test_alarms.py)."""
     created: list = []
     run(
         module.async_setup_entry(
             HomeAssistant(), entry, lambda entities: created.extend(entities)
         )
     )
-    return created
+    return [e for e in created if not isinstance(e, ALARMS)]
 
 
 class TestWhatGetsCreated:

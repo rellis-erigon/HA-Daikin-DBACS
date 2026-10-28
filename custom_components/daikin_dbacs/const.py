@@ -101,5 +101,10 @@ DEFAULT_MIN_TEMP: Final = 16.0
 DEFAULT_MAX_TEMP: Final = 32.0
 TEMP_STEP: Final = 0.5
 
+#: Entry data: every group this gateway has ever published live. A unit
+#: on this list that stops answering is an alarm, not a unit that never
+#: existed, and the list has to outlive a restart for that to hold.
+DATA_KNOWN_GROUPS: Final = "known_groups"
+
 MANUFACTURER: Final = "Daikin"
 MODEL: Final = "Interface for use in BACnet"

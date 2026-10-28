@@ -579,6 +579,10 @@ def _register_services(hass: HomeAssistant) -> None:
                 continue
             try:
                 summary = await coordinator.async_recheck()
+                if call.data.get("forget_missing"):
+                    summary["forgotten"] = [
+                        address_label(ac) for ac in coordinator.forget_missing()
+                    ]
             except DbacsError as err:
                 summary = {"host": entry.data.get(CONF_HOST), "ok": False,
                            "error": str(err)}
@@ -793,6 +797,10 @@ async def _async_options_updated(
     """Reload when the enabled points change.
 
     A point coming or going changes which entities exist, which is a reload
-    rather than something to patch in place.
+    rather than something to patch in place. A change to the entry's data
+    alone (a newly seen unit remembered) is not one.
     """
+    coordinator = getattr(entry, "runtime_data", None)
+    if coordinator is not None and dict(entry.options) == coordinator.options_at_setup:
+        return
     await hass.config_entries.async_reload(entry.entry_id)

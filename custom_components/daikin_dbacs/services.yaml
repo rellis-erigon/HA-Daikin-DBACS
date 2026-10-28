@@ -150,6 +150,16 @@ recheck:
       example: 192.0.2.10
       selector:
         text:
+    forget_missing:
+      name: Forget missing units
+      description: >-
+        Stop raising "not responding" for units the gateway no longer
+        publishes at all, after they have been removed on purpose. Units
+        that are published but not communicating are kept.
+      required: false
+      default: false
+      selector:
+        boolean:
 
 self_test:
   name: Test the connection

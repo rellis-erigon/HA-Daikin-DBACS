@@ -13,6 +13,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
+    DATA_KNOWN_GROUPS,
     DEFAULT_CONTROL,
     COV_MIN_LIFETIME,
     COV_REFRESH_SPREAD,
@@ -158,6 +159,12 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         # The live groups the first discovery found: the ones that have
         # entities. Any other group coming back needs a reload to get them.
         self.groups_at_setup: set[int] | None = None
+        self.known_groups: set[int] = {
+            int(ac) for ac in entry.data.get(DATA_KNOWN_GROUPS, ())
+        }
+        """Every group this gateway has published live, ever. See alarms.py."""
+        self.options_at_setup: dict[str, Any] = dict(entry.options)
+        """So remembering a group (a data change) does not reload the entry."""
         self._descriptions: dict[str, str | None] = {}
         self._priorities: dict[str, list[int]] = {}
         self._pending: dict[str, tuple[PointRef, Any]] = {}
@@ -333,6 +340,7 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         self.discovery = discovery
         if self.groups_at_setup is None:
             self.groups_at_setup = set(discovery.live_numbers)
+        self._remember(discovery.live_numbers)
 
         if discovery.dead:
             _LOGGER.warning(
@@ -348,6 +356,78 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
                 self.gateway.host,
             )
         return discovery
+
+    def _remember(self, live: tuple[int, ...]) -> None:
+        """Add newly seen groups to the ones this gateway is known to have."""
+        new = set(live) - self.known_groups
+        if not new:
+            return
+        self.known_groups |= new
+        self.hass.config_entries.async_update_entry(
+            self.entry,
+            data={**self.entry.data,
+                  DATA_KNOWN_GROUPS: sorted(self.known_groups)},
+        )
+
+    def forget_missing(self) -> list[int]:
+        """Stop expecting the known groups the gateway does not have now."""
+        gone = sorted(
+            ac for ac in self.known_groups
+            if not (group := self.discovery.groups.get(ac)) or not group.present
+        )
+        if gone:
+            self.known_groups -= set(gone)
+            self.hass.config_entries.async_update_entry(
+                self.entry,
+                data={**self.entry.data,
+                      DATA_KNOWN_GROUPS: sorted(self.known_groups)},
+            )
+        return gone
+
+    # --- alarms: units that were here and have gone quiet, or are faulted ---
+
+    @property
+    def watched_groups(self) -> tuple[int, ...]:
+        """Known groups, narrowed by the user's selection: the ones alarmed."""
+        selected = self.selected_groups
+        return tuple(
+            ac for ac in sorted(self.known_groups | set(self.active_groups))
+            if selected is None or ac in selected
+        )
+
+    def not_responding(self, ac_number: int) -> str | None:
+        """Why a known group is not answering, or None if it is."""
+        if not self.last_update_success:
+            return "gateway not answering"
+        group = self.discovery.groups.get(ac_number)
+        if group is None or not group.present:
+            return "no longer published by the gateway"
+        if group.communicating is False:
+            return "DIII-NET communication fault"
+        prefix = f"{ac_number}_"
+        readings = [
+            reading for key, reading in (self.data or {}).items()
+            if key.startswith(prefix)
+            and key != f"{ac_number}_communication_status"
+        ]
+        if readings and not any(reading.ok for reading in readings):
+            return "not answering reads"
+        return None
+
+    def malfunction(self, ac_number: int) -> str | None:
+        """The unit's alarm, if it is not Normal: its code, or "Malfunction"."""
+        if self.not_responding(ac_number):
+            return None
+        if not _faulted((self.data or {}).get(f"{ac_number}_alarm")):
+            return None
+        return self.fault_code(ac_number) or "Malfunction"
+
+    def unit_label(self, ac_number: int) -> str:
+        """The address, with the site's name for the unit where there is one."""
+        site = self.site.get(ac_number)
+        name = getattr(site, "name", None)
+        label = address_label(ac_number)
+        return f"{name} ({label})" if name else label
 
     # --- the points we care about -------------------------------------------
 
