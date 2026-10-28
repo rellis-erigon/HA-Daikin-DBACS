@@ -48,8 +48,14 @@ class DbacsEntity(CoordinatorEntity[DbacsCoordinator]):
         # Hang the group off the gateway's own device, by registry id rather
         # than by identifier: `via_device` is deprecated, and it silently
         # tolerated pointing at a device that had never been created.
-        if coordinator.hub_device_id is not None:
-            self._attr_device_info["via_device_id"] = coordinator.hub_device_id
+        # An indoor unit hangs off the outdoor unit that serves it, where the
+        # site says which that is, so the outdoor unit's page lists the
+        # units it powers; otherwise off the gateway.
+        parent = coordinator.system_device_ids.get(
+            getattr(site, "system", None) or ""
+        ) or coordinator.hub_device_id
+        if parent is not None:
+            self._attr_device_info["via_device_id"] = parent
 
     @property
     def reading(self) -> PointValue | None:

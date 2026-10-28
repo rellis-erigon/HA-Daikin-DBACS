@@ -82,6 +82,9 @@ class UnitMapping:
     model: str | None = None
     system: str | None = None
     outdoor: str | None = None
+    outdoor_area: str | None = None
+    """The area its outdoor unit goes in, where that has not been set by
+    hand. Outdoor units span floors, so none can inherit one."""
     faceplate: str | None = None
     """Which card face this unit is drawn with, where a site has a
     preference. Left out, the generated card uses the default."""
@@ -184,6 +187,7 @@ def load(path: str) -> dict[int, UnitMapping]:
             model=_text(value.get("model")),
             system=_text(value.get("system")),
             outdoor=_text(value.get("outdoor")),
+            outdoor_area=_text(value.get("outdoor_area")),
             faceplate=_text(value.get("faceplate")),
         )
     if not out:

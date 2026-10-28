@@ -228,8 +228,8 @@ dead or alive, carries a *Not responding* problem sensor that stays
 available and turns **on** when it stops answering, with the reason:
 `DIII-NET communication fault`, `not answering reads`, `no longer published
 by the gateway`, or `gateway not answering`. Because the list survives a
-restart, a unit that is already dead when Home Assistant starts still
-raises it.
+restart, and a unit with a device in Home Assistant counts as found, a unit
+that is already dead when Home Assistant starts still raises it.
 
 - **Each outdoor unit** gets *Not responding* too: on when any of its indoor
   units is, with `all_not_responding` true when every one of them is, which
@@ -343,10 +343,18 @@ as the integration reports it:
     "tag": "ACU A-01",
     "system": "S-01",
     "outdoor": "CU-S-01",
+    "outdoor_area": "Plant Deck",
     "model": "FXDQ40TV1B"
   }
 }
 ```
+
+**`system` and `outdoor` make the outdoor units.** Each refrigerant system
+becomes a device (named by `outdoor`) under the gateway, and every indoor
+unit on it hangs off that device, so an outdoor unit's page lists the indoor
+units it powers. Its `outdoor_area` (any one unit on the system can carry
+it) places it, because a condenser serving several floors has no area to
+inherit; an outdoor unit you have placed yourself is left where it is.
 
 > **Upgrading from 0.4:** the folder was `/share/HA-Daikin-DBACS-site`. Move the
 > `gateway-*-units.json` files to `/share/daikin_dbacs/` and restart.

@@ -151,6 +151,8 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         a mapping there are no systems — which is the honest outcome rather
         than a guess."""
         self.hub_device_id: str | None = None
+        self.system_device_ids: dict[str, str] = {}
+        """Each outdoor unit's registry id, by system: an indoor unit's parent."""
         self._dead_sweeps = 0
         """The registry id of the gateway's own device, set at setup."""
         self._restart_token = info.restart_token
@@ -340,7 +342,7 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         self.discovery = discovery
         if self.groups_at_setup is None:
             self.groups_at_setup = set(discovery.live_numbers)
-        self._remember(discovery.live_numbers)
+        self.remember(discovery.live_numbers)
 
         if discovery.dead:
             _LOGGER.warning(
@@ -357,9 +359,9 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
             )
         return discovery
 
-    def _remember(self, live: tuple[int, ...]) -> None:
+    def remember(self, groups: tuple[int, ...]) -> None:
         """Add newly seen groups to the ones this gateway is known to have."""
-        new = set(live) - self.known_groups
+        new = set(groups) - self.known_groups
         if not new:
             return
         self.known_groups |= new

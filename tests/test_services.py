@@ -49,7 +49,7 @@ def site(tmp_path, monkeypatch):
     payload = {
         "1 · 1-00": {"ac_number": 0, "name": "Room A1 ACU A-01",
                           "area": "Block A", "system": "S-01",
-                          "outdoor": "CU-S-01"},
+                          "outdoor": "CU-S-01", "outdoor_area": "Plant Deck"},
         "1 · 1-01": {"ac_number": 1, "name": "Room A2 ACU A-02",
                           "area": "Block A", "system": "S-01",
                           "outdoor": "CU-S-01"},
@@ -136,8 +136,10 @@ class TestApplyMappingFindsTheDevices:
 
     def test_a_dry_run_changes_nothing(self, loaded):
         hass, _entry, registry = loaded
+        # Setup itself links the outdoor units; the dry run adds nothing.
+        before = list(registry.updated)
         call(hass, "apply_mapping", {"dry_run": True})
-        assert registry.updated == []
+        assert registry.updated == before
 
     def test_applying_names_and_places_them(self, loaded):
         hass, _entry, registry = loaded
@@ -314,3 +316,66 @@ class TestRecheck:
     def test_another_host_is_left_alone(self, loaded):
         hass, _entry, _devices = loaded
         assert call(hass, "recheck", {"host": "198.51.100.1"}) == {"gateways": []}
+
+
+class TestOutdoorUnits:
+    def _outdoor(self, registry, entry):
+        return next(
+            device for device in registry.devices.values()
+            if (DOMAIN, f"{entry.entry_id}_system_S-01") in device.identifiers
+        )
+
+    def test_registered_at_setup_under_the_gateway(self, loaded):
+        hass, entry, registry = loaded
+        outdoor = self._outdoor(registry, entry)
+        assert outdoor.via_device_id == "hub_device_id"
+        assert entry.runtime_data.system_device_ids == {"S-01": outdoor.id}
+
+    def test_placed_in_the_mappings_outdoor_area(self, loaded):
+        hass, entry, registry = loaded
+        outdoor = self._outdoor(registry, entry)
+        assert outdoor.area_id == "plant_deck"
+
+    def test_an_area_set_by_hand_is_kept(self, loaded):
+        from custom_components.daikin_dbacs import _register_outdoor_units
+
+        hass, entry, registry = loaded
+        outdoor = self._outdoor(registry, entry)
+        outdoor.area_id = "somewhere_else"
+        _register_outdoor_units(hass, entry, entry.runtime_data, registry)
+        assert outdoor.area_id == "somewhere_else"
+
+    def test_indoor_units_hang_off_the_outdoor_unit_serving_them(self, loaded):
+        from custom_components.daikin_dbacs.entity import DbacsEntity
+        from custom_components.daikin_dbacs.objects import MEMBERS_BY_KEY
+
+        hass, entry, registry = loaded
+        coordinator = entry.runtime_data
+        unit = DbacsEntity(coordinator, 0, MEMBERS_BY_KEY["room_temp"])
+        assert unit._attr_device_info["via_device_id"] == self._outdoor(registry, entry).id
+
+
+def test_a_unit_with_a_device_is_watched_even_if_dead_at_setup(monkeypatch, site):
+    """Found before (it has a device), dead now: still owed its alarm."""
+    from custom_components.daikin_dbacs.const import DATA_KNOWN_GROUPS
+
+    state = fake.FakeGatewayState(populated={0, 1}, dead={1}, device_instance=12)
+
+    async def connect(self):
+        fake.attach(self, state)
+        return await self.read_info()
+
+    monkeypatch.setattr(gw.DbacsGateway, "connect", connect)
+    hass = HomeAssistant()
+    entry = ConfigEntry(
+        data={CONF_HOST: "192.0.2.10", CONF_DEVICE_INSTANCE: 12},
+        options={OPT_MEMBERS: MEMBERS}, entry_id="entry_twelve",
+    )
+    hass.config_entries.entries.append(entry)
+    dr.async_get(hass).add_device(
+        "old_device", {(DOMAIN, "entry_twelve_1")}, config_entry_id="entry_twelve")
+    run(async_setup_entry(hass, entry))
+    coordinator = entry.runtime_data
+    assert 1 not in coordinator.active_groups
+    assert coordinator.watched_groups == (0, 1)
+    assert entry.data[DATA_KNOWN_GROUPS] == [0, 1]

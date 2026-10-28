@@ -463,6 +463,7 @@ class _DeviceEntry:
         self.name = None
         self.name_by_user = None
         self.area_id = None
+        self.via_device_id = None
         # Real DeviceEntry carries the entries that own it, and
         # async_entries_for_config_entry filters on exactly this.
         self.config_entries = set(config_entries or ())
@@ -477,8 +478,16 @@ class _DeviceRegistry:
         self.updated: list = []
 
     def async_get_or_create(self, **kwargs):
+        # Returns the existing device for the same identifiers, as the real
+        # one does. The first device made is the gateway's, as at setup.
+        for existing in self.devices.values():
+            if existing.identifiers == kwargs.get("identifiers"):
+                self.created.append(kwargs)
+                return existing
         entry = _DeviceEntry(
             kwargs.get("identifiers"),
+            device_id="hub_device_id" if not self.devices
+            else f"created_{len(self.devices)}",
             config_entries=[kwargs["config_entry_id"]]
             if kwargs.get("config_entry_id") else (),
         )

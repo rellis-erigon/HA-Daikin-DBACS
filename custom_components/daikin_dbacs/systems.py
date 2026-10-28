@@ -37,6 +37,8 @@ class System:
     name: str
     outdoor: str | None
     ac_numbers: tuple[int, ...]
+    area: str | None = None
+    """Where the site mapping says the outdoor unit is (`outdoor_area`)."""
 
     @property
     def label(self) -> str:
@@ -138,15 +140,18 @@ def systems_from_mapping(mapping: dict[int, Any]) -> dict[str, System]:
     """Group the mapped units by the refrigerant system they are on."""
     grouped: dict[str, list[int]] = {}
     outdoors: dict[str, str | None] = {}
+    areas: dict[str, str | None] = {}
     for ac, entry in sorted(mapping.items()):
         name = getattr(entry, "system", None)
         if not name:
             continue
         grouped.setdefault(name, []).append(ac)
         outdoors.setdefault(name, getattr(entry, "outdoor", None))
+        if not areas.get(name):
+            areas[name] = getattr(entry, "outdoor_area", None)
     return {
         name: System(name=name, outdoor=outdoors.get(name),
-                     ac_numbers=tuple(acs))
+                     ac_numbers=tuple(acs), area=areas.get(name))
         for name, acs in sorted(grouped.items())
     }
 

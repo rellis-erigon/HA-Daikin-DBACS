@@ -279,12 +279,52 @@ async def async_setup_entry(hass: HomeAssistant, entry: DbacsConfigEntry) -> boo
                 len(coordinator.systems),
             )
 
+    _register_outdoor_units(hass, entry, coordinator, registry)
+    # A unit with a device here has been found before, whether or not it
+    # answers now: one already dead when alarms were added is still owed one.
+    coordinator.remember(tuple(_group_devices(registry, entry)))
+
     entry.runtime_data = coordinator
     _reconcile_enabled_entities(hass, entry, coordinator)
     _register_services(hass)
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
+
+
+def _register_outdoor_units(hass, entry, coordinator, registry) -> None:
+    """A device per outdoor unit, before any entity names it as a parent.
+
+    Registered here rather than implied by the outdoor unit's entities so
+    that each indoor unit can name the outdoor unit serving it as its
+    parent, and the outdoor unit's page lists the indoor units it powers.
+
+    An outdoor unit with no area is put in the site mapping's
+    `outdoor_area`; one placed by hand stays where it is.
+    """
+    if not coordinator.systems:
+        return
+    areas = ar.async_get(hass)
+    area_ids = {area.name: area.id for area in areas.async_list_areas()}
+    for name, system in coordinator.systems.items():
+        device = registry.async_get_or_create(
+            config_entry_id=entry.entry_id,
+            identifiers={(DOMAIN, f"{entry.entry_id}_system_{name}")},
+            name=system.label,
+            manufacturer=MANUFACTURER,
+            model="Outdoor unit (derived from its indoor units)",
+            serial_number=system.name,
+        )
+        changes: dict[str, Any] = {}
+        if getattr(device, "via_device_id", None) != coordinator.hub_device_id:
+            changes["via_device_id"] = coordinator.hub_device_id
+        if device.area_id is None and system.area:
+            if system.area not in area_ids:
+                area_ids[system.area] = areas.async_create(system.area).id
+            changes["area_id"] = area_ids[system.area]
+        if changes:
+            registry.async_update_device(device.id, **changes)
+        coordinator.system_device_ids[name] = device.id
 
 
 def _register_services(hass: HomeAssistant) -> None:
