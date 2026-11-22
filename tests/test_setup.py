@@ -19,6 +19,7 @@ from custom_components.daikin_dbacs import gateway as gw
 from custom_components.daikin_dbacs.const import (
     CONF_DEVICE_INSTANCE,
     CONF_HOST,
+    OPT_CONTROL,
     OPT_MEMBERS,
 )
 
@@ -279,6 +280,59 @@ class TestThePointSelectionIsHonoured:
 
         run(setup(hass, entry))
         assert all(e.disabled_by is None for e in registry.entries)
+
+    # -- points the climate entity already shows (0.9.0) --------------------
+
+    def _controlled(self, members):
+        return entry_for({OPT_MEMBERS: members, OPT_CONTROL: True})
+
+    def test_a_point_the_climate_entity_shows_is_switched_off(self, connects):
+        from custom_components.daikin_dbacs import async_setup_entry as setup
+
+        hass = HomeAssistant()
+        entry = self._controlled(["room_temp", "setpoint", "mode_status"])
+        registry, _er = self._registry(hass, entry)
+        registry.add("sensor.dbacs_setpoint", f"{entry.entry_id}_0_setpoint")
+        registry.add("sensor.dbacs_mode", f"{entry.entry_id}_0_mode_status")
+        registry.add("sensor.dbacs_room_temp", f"{entry.entry_id}_0_room_temp")
+
+        run(setup(hass, entry))
+        state = {e.entity_id: e.disabled_by for e in registry.entries}
+        assert state["sensor.dbacs_setpoint"] == "integration"
+        assert state["sensor.dbacs_mode"] == "integration"
+        # Room temperature keeps its own entity: it carries the statistics.
+        assert state["sensor.dbacs_room_temp"] is None
+
+    def test_the_trim_happens_once_and_a_point_turned_back_on_stays_on(
+        self, connects
+    ):
+        from custom_components.daikin_dbacs import async_setup_entry as setup
+
+        hass = HomeAssistant()
+        entry = self._controlled(["room_temp", "setpoint"])
+        registry, _er = self._registry(hass, entry)
+        registry.add("sensor.dbacs_setpoint", f"{entry.entry_id}_0_setpoint")
+
+        run(setup(hass, entry))
+        assert registry.entries[0].disabled_by == "integration"
+
+        # Somebody wants it after all and switches it back on.
+        registry.entries[0].disabled_by = None
+        run(setup(hass, entry))
+        assert registry.entries[0].disabled_by is None
+
+    def test_without_control_there_is_no_climate_entity_so_nothing_is_trimmed(
+        self, connects
+    ):
+        from custom_components.daikin_dbacs import async_setup_entry as setup
+
+        hass = HomeAssistant()
+        entry = entry_for({OPT_MEMBERS: ["room_temp", "setpoint"]})
+        registry, _er = self._registry(hass, entry)
+        registry.add("sensor.dbacs_setpoint", f"{entry.entry_id}_0_setpoint")
+
+        run(setup(hass, entry))
+        assert registry.entries[0].disabled_by is None
 
     def test_another_integrations_entity_is_left_alone(self, connects):
         from custom_components.daikin_dbacs import async_setup_entry as setup

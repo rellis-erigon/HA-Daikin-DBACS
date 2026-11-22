@@ -328,6 +328,18 @@ READABLE: Final = tuple(
 #: made from it and the point list has no say over it.
 SELECTABLE: Final = tuple(m for m in READABLE if m.kind is Kind.STATUS)
 
+#: Points a unit's climate entity already shows (mode, fan speed, setpoint,
+#: louvre, and whether the thermostat is calling), and which the faceplate
+#: card reads from the climate entity when there is one. They are still
+#: polled — the climate entity is built from them — but a standalone entity
+#: for each is only switched on by default for a unit without a climate
+#: entity. Across a few hundred units that is a thousand entities every
+#: browser would otherwise download and follow for nothing.
+SHOWN_BY_CLIMATE: Final = frozenset({
+    "mode_status", "fan_status", "setpoint", "air_direction_status",
+    "thermo_status",
+})
+
 #: What a fresh config entry enables.
 DEFAULT_MEMBERS: Final = tuple(m.key for m in _MEMBERS if m.default_on)
 

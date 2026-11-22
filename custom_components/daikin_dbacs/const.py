@@ -108,3 +108,7 @@ DATA_KNOWN_GROUPS: Final = "known_groups"
 
 MANUFACTURER: Final = "Daikin"
 MODEL: Final = "Interface for use in BACnet"
+
+#: Set in a config entry's data once the points its climate entities already
+#: show have had their standalone entities switched off (0.9.0).
+DATA_TRIMMED_SHOWN_BY_CLIMATE: Final = "trimmed_shown_by_climate"

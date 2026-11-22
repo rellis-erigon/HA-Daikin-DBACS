@@ -30,6 +30,7 @@ from .const import (
     CONF_LOCAL_PORT,
     CONF_OUR_INSTANCE,
     CONF_PORT,
+    DATA_TRIMMED_SHOWN_BY_CLIMATE,
     DEFAULT_LOCAL_PORT,
     DEFAULT_OUR_INSTANCE,
     DEFAULT_PORT,
@@ -38,6 +39,7 @@ from .const import (
     MODEL,
 )
 from .coordinator import DbacsCoordinator
+from .objects import SHOWN_BY_CLIMATE
 from .cards import generated
 from .systems import systems_from_mapping
 from .mapping import MappingError, load as load_mapping, path_for, plan
@@ -758,8 +760,13 @@ def _reconcile_enabled_entities(
 
     The chosen list is the authority, and only entities this integration
     disabled are re-enabled: a point somebody switched off by hand stays off.
+
+    A point the unit's climate entity already shows (`SHOWN_BY_CLIMATE`) is
+    switched off once, the first time this runs, and never again: one that
+    somebody then switches back on by hand stays on.
     """
     registry = er.async_get(hass)
+    first_trim = not entry.data.get(DATA_TRIMMED_SHOWN_BY_CLIMATE)
     chosen = set(coordinator.enabled_member_keys)
     governed = {member.key for member in SELECTABLE}
     enabled = disabled = 0
@@ -778,7 +785,23 @@ def _reconcile_enabled_entities(
                 enabled += 1
             continue
 
-        wanted = key in chosen
+        ac_number = _ac_number_of(entity.unique_id, entry.entry_id)
+        shown = (
+            key in SHOWN_BY_CLIMATE
+            and ac_number is not None
+            and coordinator.has_climate(ac_number)
+        )
+        wanted = key in chosen and not shown
+
+        if (
+            not wanted
+            and shown
+            and key in chosen
+            and not first_trim
+            and entity.disabled_by is None
+        ):
+            # Trimmed once already; this one was switched back on by hand.
+            continue
 
         if wanted and entity.disabled_by is er.RegistryEntryDisabler.INTEGRATION:
             registry.async_update_entity(entity.entity_id, disabled_by=None)
@@ -797,12 +820,26 @@ def _reconcile_enabled_entities(
             hass.states.async_remove(entity.entity_id)
             disabled += 1
 
+    if first_trim:
+        hass.config_entries.async_update_entry(
+            entry, data={**entry.data, DATA_TRIMMED_SHOWN_BY_CLIMATE: True}
+        )
+
     if enabled or disabled:
         _LOGGER.debug(
             "point selection changed: enabled %d entities, disabled %d",
             enabled,
             disabled,
         )
+
+
+def _ac_number_of(unique_id: str, entry_id: str) -> int | None:
+    """The AC number out of one of our unique ids, or None if it has none."""
+    prefix = f"{entry_id}_"
+    if not unique_id.startswith(prefix):
+        return None
+    ac, _, _rest = unique_id[len(prefix) :].partition("_")
+    return int(ac) if ac.isdigit() else None
 
 
 def _member_key_of(unique_id: str, entry_id: str) -> str | None:

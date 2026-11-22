@@ -106,8 +106,14 @@ left out entirely unless you ask for them separately.
 
 ## What you get per indoor unit
 
-**Every status point the unit reports, enabled by default** — eighteen of
-them where the gateway publishes all eighteen:
+**Every status point the unit reports** — eighteen of them where the
+gateway publishes all eighteen. Five of them — mode, fan speed, setpoint,
+air direction and thermostat — are what the unit's climate entity already
+shows, and the faceplate card reads them from it. On a unit with a climate
+entity their standalone entities **start disabled**: they are still read,
+because the climate entity is built from them, but a few hundred units'
+worth of copies is a thousand entities every open browser downloads and
+follows. Switch any of them on from the device page and it stays on.
 
 | Entity | From |
 |---|---|

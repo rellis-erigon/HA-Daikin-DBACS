@@ -53,6 +53,7 @@ from .objects import (
     address_label,
     is_binary_active,
     points_for,
+    SHOWN_BY_CLIMATE,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -226,6 +227,26 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
     def control_enabled(self) -> bool:
         """Whether this entry may write to the gateway at all."""
         return bool(self.entry.options.get(OPT_CONTROL, DEFAULT_CONTROL))
+
+    def has_climate(self, ac_number: int) -> bool:
+        """Whether this group gets a climate entity.
+
+        Without a power command and a mode command there is nothing to
+        control, and a climate entity would be a decoration.
+        """
+        if not self.control_enabled:
+            return False
+        group = self.discovery.groups.get(ac_number)
+        return group is None or (
+            group.publishes(MEMBERS_BY_KEY["on_off_command"].number)
+            and group.publishes(MEMBERS_BY_KEY["mode_command"].number)
+        )
+
+    def entity_wanted(self, ac_number: int, key: str) -> bool:
+        """Whether a point's standalone entity should be on by default."""
+        if key not in self.enabled_member_keys:
+            return False
+        return not (key in SHOWN_BY_CLIMATE and self.has_climate(ac_number))
 
     @property
     def gated_enabled(self) -> bool:

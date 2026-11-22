@@ -32,8 +32,8 @@ class DbacsEntity(CoordinatorEntity[DbacsCoordinator]):
 
         self._attr_unique_id = f"{entry_id}_{ac_number}_{member.key}"
         self._attr_name = member.label
-        self._attr_entity_registry_enabled_default = (
-            member.key in coordinator.enabled_member_keys
+        self._attr_entity_registry_enabled_default = coordinator.entity_wanted(
+            ac_number, member.key
         )
         # The gateway cannot say what is on the end of an address; the site
         # mapping can, and where it does the device carries the real model.

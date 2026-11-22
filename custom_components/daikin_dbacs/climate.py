@@ -88,15 +88,8 @@ async def async_setup_entry(
 
     entities = []
     for ac_number in coordinator.active_groups:
-        group = coordinator.discovery.groups.get(ac_number)
-        # Without a power command and a mode command there is nothing to
-        # control, and a climate entity would be a decoration.
-        if group is not None and not (
-            group.publishes(MEMBERS_BY_KEY["on_off_command"].number)
-            and group.publishes(MEMBERS_BY_KEY["mode_command"].number)
-        ):
-            continue
-        entities.append(DbacsClimate(coordinator, ac_number))
+        if coordinator.has_climate(ac_number):
+            entities.append(DbacsClimate(coordinator, ac_number))
     async_add_entities(entities)
 
 

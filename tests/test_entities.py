@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.daikin_dbacs import alarms, binary_sensor, sensor
 from custom_components.daikin_dbacs import gateway as gw
-from custom_components.daikin_dbacs.const import OPT_MEMBERS
+from custom_components.daikin_dbacs.const import OPT_CONTROL, OPT_MEMBERS
 from custom_components.daikin_dbacs.coordinator import DbacsCoordinator
 
 import fake_gateway as fake
@@ -100,6 +100,26 @@ class TestWhatGetsCreated:
         by_key = {e.member.key: e for e in created}
         assert by_key["room_temp"].entity_registry_enabled_default
         assert not by_key["heater_status"].entity_registry_enabled_default
+
+
+    def test_points_the_climate_entity_shows_start_disabled(self):
+        # The climate entity, and the faceplate reading it, carry mode, fan,
+        # setpoint, louvre and thermostat; standalone copies are opt-in.
+        _coordinator, entry, _state = build(
+            fake.FakeGatewayState(populated={0}),
+            options={
+                OPT_MEMBERS: ["room_temp", "setpoint", "fan_status",
+                              "compressor_status"],
+                OPT_CONTROL: True,
+            },
+        )
+        created = collect(sensor, entry) + collect(binary_sensor, entry)
+        by_key = {e.member.key: e for e in created}
+        assert not by_key["setpoint"].entity_registry_enabled_default
+        assert not by_key["fan_status"].entity_registry_enabled_default
+        # The faceplate's COMP lamp has no climate equivalent.
+        assert by_key["compressor_status"].entity_registry_enabled_default
+        assert by_key["room_temp"].entity_registry_enabled_default
 
 
 class TestIdentity:
