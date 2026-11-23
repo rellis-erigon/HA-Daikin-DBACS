@@ -6,6 +6,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from collections.abc import Callable
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -57,6 +58,19 @@ from .objects import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+#: Seconds a site-wide roll-up (outdoor units, units in alarm) may lag a
+#: change-of-value notification. They summarise every unit, so refreshing
+#: them on each notification is what the per-unit listeners exist to avoid.
+ROLLUP_DELAY = 5.0
+
+#: The points the roll-ups read (systems.py, alarms.py). A notification for
+#: any other point — room temperature, by far the most frequent — cannot
+#: change a roll-up, so it does not schedule one.
+ROLLUP_KEYS = frozenset({
+    "on_off_status", "thermo_status", "compressor_status", "alarm",
+    "mode_status", "malfunction_code", "communication_status",
+})
 
 #: Every DIII-NET slot the gateway could publish. Discovery asks about all of
 #: them because a group is cheap to ask about and expensive to miss.
@@ -158,6 +172,11 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         """The registry id of the gateway's own device, set at setup."""
         self._restart_token = info.restart_token
         self._cov_points: dict[str, PointRef] = {}
+        # Who to tell when one unit's data changes between sweeps, and the
+        # site-wide roll-ups that are told at most every ROLLUP_DELAY.
+        self._unit_listeners: dict[int, list[Callable[[], None]]] = {}
+        self._rollup_listeners: list[Callable[[], None]] = []
+        self._rollup_timer: asyncio.TimerHandle | None = None
         self._cov_failed: set[str] = set()
         # The live groups the first discovery found: the ones that have
         # entities. Any other group coming back needs a reload to get them.
@@ -812,7 +831,7 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         data = dict(self.data or {})
         data[point.key] = PointValue(point, value=value)
         self._confirm({point.key: data[point.key]}, read_from=self.hass.loop.time())
-        self._publish(data)
+        self._publish(data, point.ac_number, point.member.key)
 
     @property
     def cov_summary(self) -> dict[str, int]:
@@ -896,19 +915,62 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
         """
         data = dict(self.data or {})
         data[point.key] = PointValue(point, value=value)
-        self._publish(data)
+        self._publish(data, point.ac_number)
 
-    def _publish(self, data: dict[str, PointValue]) -> None:
-        """Show data that arrived between sweeps, without moving the sweep.
+    def _publish(
+        self,
+        data: dict[str, PointValue],
+        ac_number: int,
+        changed_key: str | None = None,
+    ) -> None:
+        """Show one unit's data that arrived between sweeps.
 
         Not `async_set_updated_data`: that also restarts the refresh timer,
         so with change-of-value arriving every second or two across a
         gateway, the next sweep was pushed back for ever and every point
         that is only swept (setpoint, mode, fan, a change made at the wall
         controller) stopped updating after the first sweep.
+
+        And not `async_update_listeners` either: that re-renders every
+        entity on the gateway — two thousand of them — for one changed
+        point. At a notification a second that held Home Assistant's event
+        loop for a quarter of a second each time, a quarter of all its time,
+        and every dashboard and automation on the instance felt it. Only
+        the unit's own entities are told now; the site-wide roll-ups catch
+        up within ROLLUP_DELAY, and a sweep still refreshes everything.
         """
         self.data = data
-        self.async_update_listeners()
+        for update in tuple(self._unit_listeners.get(ac_number, ())):
+            update()
+        if changed_key is not None and changed_key not in ROLLUP_KEYS:
+            return
+        if self._rollup_listeners and self._rollup_timer is None:
+            self._rollup_timer = self.hass.loop.call_later(
+                ROLLUP_DELAY, self._update_rollups
+            )
+
+    @callback
+    def _update_rollups(self) -> None:
+        self._rollup_timer = None
+        for update in tuple(self._rollup_listeners):
+            update()
+
+    @callback
+    def async_add_unit_listener(
+        self, ac_number: int, update: Callable[[], None]
+    ) -> Callable[[], None]:
+        """Be told when this unit's data changes between sweeps."""
+        listeners = self._unit_listeners.setdefault(ac_number, [])
+        listeners.append(update)
+        return lambda: listeners.remove(update)
+
+    @callback
+    def async_add_rollup_listener(
+        self, update: Callable[[], None]
+    ) -> Callable[[], None]:
+        """Be told, at most every ROLLUP_DELAY, that some unit changed."""
+        self._rollup_listeners.append(update)
+        return lambda: self._rollup_listeners.remove(update)
 
     def _coalesce(
         self, point: PointRef, value: Any, last_at: float
@@ -1003,7 +1065,7 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
             data = dict(self.data or {})
             data.update({k: v for k, v in readings.items() if v.ok})
             self._confirm(readings, read_from=started)
-            self._publish(data)
+            self._publish(data, waiting.point.ac_number)
 
     @property
     def confirm_within(self) -> float:
@@ -1183,6 +1245,9 @@ class DbacsCoordinator(DataUpdateCoordinator[dict[str, PointValue]]):
 
     async def async_shutdown_gateway(self) -> None:
         """Give the gateway its subscription slots back and close the port."""
+        if self._rollup_timer is not None:
+            self._rollup_timer.cancel()
+            self._rollup_timer = None
         await self.gateway.close()
 
 

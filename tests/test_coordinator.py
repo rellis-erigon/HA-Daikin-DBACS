@@ -322,9 +322,11 @@ class TestChangeOfValue:
         run(coordinator.async_refresh())
 
         point = coordinator.points()[0]
+        told = []
+        coordinator.async_add_unit_listener(point.ac_number, lambda: told.append(1))
         coordinator._cov_update(point, 29.5)
         assert coordinator.data[point.key].value == 29.5
-        assert coordinator.updates
+        assert told == [1]
 
     def test_a_notification_does_not_postpone_the_sweep(self):
         """Change-of-value must not restart the refresh timer.
@@ -343,7 +345,57 @@ class TestChangeOfValue:
         for value in (29.5, 29.0, 28.5):
             coordinator._cov_update(coordinator.points()[0], value)
         assert coordinator.refresh_timer_resets == 0
-        assert len(coordinator.updates) == before + 3
+        # Nor does it re-render every entity on the gateway: see the next class.
+        assert len(coordinator.updates) == before
+
+    def test_a_notification_tells_only_that_units_entities(self):
+        """One changed point used to re-render all two thousand entities.
+
+        At a notification a second that held the event loop a quarter of a
+        second each time — a quarter of Home Assistant's time, felt on
+        every dashboard. Only the unit's own entities are told now.
+        """
+        state = fake.FakeGatewayState(populated={0, 1})
+        coordinator, _ = build(state)
+        run(coordinator.async_discover())
+        run(coordinator.async_refresh())
+        told = {0: 0, 1: 0}
+        for ac in told:
+            coordinator.async_add_unit_listener(
+                ac, lambda ac=ac: told.__setitem__(ac, told[ac] + 1)
+            )
+        unit0 = next(p for p in coordinator.points() if p.ac_number == 0)
+        coordinator._cov_update(unit0, 21.5)
+        assert told == {0: 1, 1: 0}
+
+    def test_roll_ups_catch_up_once_after_a_burst(self):
+        from custom_components.daikin_dbacs.coordinator import ROLLUP_DELAY
+
+        state = fake.FakeGatewayState(populated={0})
+        coordinator, _ = build(state)
+        run(coordinator.async_discover())
+        run(coordinator.async_refresh())
+        rolled = []
+        coordinator.async_add_rollup_listener(lambda: rolled.append(1))
+        for value in (29.5, 29.0, 28.5):
+            coordinator._cov_update(coordinator.points()[0], value)
+        assert rolled == []
+        coordinator.hass.loop.advance(ROLLUP_DELAY)
+        assert rolled == [1]
+
+    def test_a_room_temperature_never_wakes_the_roll_ups(self):
+        from custom_components.daikin_dbacs.coordinator import ROLLUP_DELAY
+
+        state = fake.FakeGatewayState(populated={0})
+        coordinator, _ = build(state)
+        run(coordinator.async_discover())
+        run(coordinator.async_refresh())
+        rolled = []
+        coordinator.async_add_rollup_listener(lambda: rolled.append(1))
+        temp = next(p for p in coordinator.points() if p.member.key == "room_temp")
+        coordinator._cov_update(temp, 22.5)
+        coordinator.hass.loop.advance(ROLLUP_DELAY)
+        assert rolled == []
 
 
 class TestSubscriptionRefreshStagger:

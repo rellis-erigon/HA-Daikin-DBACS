@@ -123,6 +123,16 @@ class UnitsInAlarm(CoordinatorEntity, BinarySensorEntity):
     _attr_has_entity_name = True
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
 
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        # Summarises every unit, so it follows change-of-value at most every
+        # ROLLUP_DELAY rather than on each notification.
+        self.async_on_remove(
+            self.coordinator.async_add_rollup_listener(
+                self._handle_coordinator_update
+            )
+        )
+
     def __init__(self, coordinator) -> None:
         super().__init__(coordinator)
         entry_id = coordinator.entry.entry_id

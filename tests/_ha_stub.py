@@ -51,12 +51,32 @@ class _Loop:
 
     def __init__(self) -> None:
         self.now = 1000.0
+        self.timers: list = []
 
     def time(self) -> float:
         return self.now
 
     def advance(self, seconds: float) -> None:
         self.now += seconds
+        due = [t for t in self.timers if t.when <= self.now and not t.cancelled]
+        self.timers = [t for t in self.timers if t not in due]
+        for timer in due:
+            timer.callback(*timer.args)
+
+    def call_later(self, delay, callback, *args):
+        """As asyncio's: runs when `advance` passes the moment."""
+        timer = _Timer(self.now + delay, callback, args)
+        self.timers.append(timer)
+        return timer
+
+
+class _Timer:
+    def __init__(self, when, callback, args) -> None:
+        self.when, self.callback, self.args = when, callback, args
+        self.cancelled = False
+
+    def cancel(self) -> None:
+        self.cancelled = True
 
 
 class _SupportsResponse(StrEnum):
@@ -286,6 +306,12 @@ class DataUpdateCoordinator:
 class CoordinatorEntity:
     def __init__(self, coordinator) -> None:
         self.coordinator = coordinator
+
+    def async_on_remove(self, func) -> None:
+        self.__dict__.setdefault("_on_remove", []).append(func)
+
+    def _handle_coordinator_update(self) -> None:
+        self.async_write_ha_state()
 
     def __class_getitem__(cls, _item):
         return cls
